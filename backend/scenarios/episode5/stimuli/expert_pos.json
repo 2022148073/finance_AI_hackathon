@@ -1,0 +1,42 @@
+[
+    {
+        "template_id":  "EXPERT_POS_01",
+        "source":  "expert",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "전문가 의견",
+        "content":  "최근 실적 흐름과 사업 환경을 고려하면 A사의 중기 성장 가능성은 비교적 긍정적으로 평가됩니다. 현재의 변동성은 장기적인 성장 전망을 훼손할 수준은 아니라는 판단입니다."
+    },
+    {
+        "template_id":  "EXPERT_POS_02",
+        "source":  "expert",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "전문가 의견",
+        "content":  "A사의 수익성 개선과 비용 구조 변화를 고려할 때 향후 실적이 점진적으로 개선될 가능성이 있습니다. 현재 가격 수준은 중장기 관점에서 부담이 크지 않다는 분석입니다."
+    },
+    {
+        "template_id":  "EXPERT_POS_03",
+        "source":  "expert",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "전문가 의견",
+        "content":  "A사의 핵심 사업 경쟁력은 현재까지 안정적으로 유지되고 있습니다. 단기적인 가격 변동보다 장기적인 사업 성장 가능성에 주목할 필요가 있다는 의견입니다."
+    },
+    {
+        "template_id":  "EXPERT_POS_04",
+        "source":  "expert",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "전문가 의견",
+        "content":  "최근 시장 환경이 A사에 우호적으로 변화하고 있으며 실적 회복 가능성도 높아지고 있습니다. 위험 요인은 존재하지만 현재로서는 긍정적인 요소가 다소 우세하다는 평가입니다."
+    },
+    {
+        "template_id":  "EXPERT_POS_05",
+        "source":  "expert",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "전문가 의견",
+        "content":  "A사의 현재 사업 구조와 재무 흐름을 고려할 때 중장기적인 성장 여력은 충분하다는 판단입니다. 최근 조정은 투자 매력도를 일부 높이는 요인이 될 수 있다는 분석입니다."
+    }
+]

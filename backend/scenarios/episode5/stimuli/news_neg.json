@@ -1,0 +1,42 @@
+[
+    {
+        "template_id":  "NEWS_NEG_01",
+        "source":  "news",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "A사, 주요 사업 부문 성장세 둔화",
+        "content":  "A사의 주요 사업 부문에서 최근 성장세가 둔화되는 모습이 나타나고 있습니다. 시장에서는 향후 실적 개선 속도가 예상보다 느려질 가능성을 주시하고 있습니다."
+    },
+    {
+        "template_id":  "NEWS_NEG_02",
+        "source":  "news",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "A사, 원가 상승으로 수익성 부담 확대",
+        "content":  "최근 원재료와 운영 비용 상승으로 A사의 비용 부담이 증가하고 있습니다. 이러한 흐름이 지속될 경우 수익성이 다소 약화될 가능성이 있다는 분석입니다."
+    },
+    {
+        "template_id":  "NEWS_NEG_03",
+        "source":  "news",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "A사 주력 시장 수요 둔화 우려",
+        "content":  "A사의 주요 제품이 속한 시장에서 최근 수요 둔화 신호가 나타나고 있습니다. 시장 환경이 약화될 경우 향후 매출에 부담으로 작용할 수 있다는 전망입니다."
+    },
+    {
+        "template_id":  "NEWS_NEG_04",
+        "source":  "news",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "A사 신규 사업 성과 불확실성 확대",
+        "content":  "A사가 추진 중인 신규 사업의 성과가 예상보다 늦어질 가능성이 제기되고 있습니다. 추가 투자 부담이 단기 실적에 영향을 줄 수 있다는 우려도 나오고 있습니다."
+    },
+    {
+        "template_id":  "NEWS_NEG_05",
+        "source":  "news",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "A사 경쟁 심화로 시장 점유율 부담",
+        "content":  "최근 경쟁 업체들의 사업 확대가 이어지면서 A사의 시장 경쟁이 심화되고 있습니다. 경쟁 상황이 지속될 경우 향후 시장 점유율과 수익성에 부담이 될 수 있습니다."
+    }
+]

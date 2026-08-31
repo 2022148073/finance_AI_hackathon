@@ -1,0 +1,42 @@
+[
+    {
+        "template_id":  "COMM_NEG_01",
+        "source":  "community",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "투자자 커뮤니티",
+        "content":  "최근 움직임을 보면 생각보다 불안한 것 같아요. 저는 조금 더 지켜보고 상황이 안정될 때까지 비중을 줄이는 게 낫다고 봅니다."
+    },
+    {
+        "template_id":  "COMM_NEG_02",
+        "source":  "community",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "투자자 커뮤니티",
+        "content":  "최근 기대감이 너무 많이 반영된 것 같아서 지금 추가 매수하기에는 부담스럽네요. 저는 일단 일부 정리하고 다시 들어갈 생각입니다."
+    },
+    {
+        "template_id":  "COMM_NEG_03",
+        "source":  "community",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "투자자 커뮤니티",
+        "content":  "실적 전망이 아직 확실하지 않은데 가격만 먼저 오른 느낌입니다. 저는 지금은 위험을 조금 줄이고 관망하는 쪽이 낫다고 생각합니다."
+    },
+    {
+        "template_id":  "COMM_NEG_04",
+        "source":  "community",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "투자자 커뮤니티",
+        "content":  "요즘 시장 분위기도 애매하고 A사도 변동이 계속되는 것 같아요. 괜히 무리해서 들어가기보다는 현금 비중을 높이는 게 편할 것 같습니다."
+    },
+    {
+        "template_id":  "COMM_NEG_05",
+        "source":  "community",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "투자자 커뮤니티",
+        "content":  "주변에서는 괜찮다고 하지만 저는 아직 불안 요소가 많아 보입니다. 당장은 수익보다 손실 가능성을 먼저 생각해야 할 것 같아요."
+    }
+]

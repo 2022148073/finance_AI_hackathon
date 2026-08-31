@@ -1,0 +1,42 @@
+[
+    {
+        "template_id":  "NEWS_POS_01",
+        "source":  "news",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "A사, 주요 사업 부문 매출 증가세",
+        "content":  "A사의 주요 사업 부문 매출이 최근 개선 흐름을 보이고 있습니다. 시장에서는 향후 실적에도 긍정적인 영향을 줄 가능성이 있다는 평가가 나오고 있습니다."
+    },
+    {
+        "template_id":  "NEWS_POS_02",
+        "source":  "news",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "A사, 신규 계약 체결로 사업 확대 기대",
+        "content":  "A사가 최근 신규 공급 계약을 체결한 것으로 알려졌습니다. 이번 계약이 향후 안정적인 매출 확대에 기여할 수 있다는 전망이 나오고 있습니다."
+    },
+    {
+        "template_id":  "NEWS_POS_03",
+        "source":  "news",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "A사, 비용 효율화로 수익성 개선 가능성",
+        "content":  "A사가 운영 비용 절감과 생산 효율화 작업을 진행하고 있습니다. 비용 구조 개선이 지속될 경우 향후 수익성이 개선될 가능성이 있다는 분석입니다."
+    },
+    {
+        "template_id":  "NEWS_POS_04",
+        "source":  "news",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "A사 주력 시장 수요 회복 조짐",
+        "content":  "A사의 주요 제품이 속한 시장에서 최근 수요 회복 조짐이 관찰되고 있습니다. 시장 환경 개선이 회사 실적에 긍정적으로 작용할 가능성이 제기됩니다."
+    },
+    {
+        "template_id":  "NEWS_POS_05",
+        "source":  "news",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "A사, 신규 사업 투자 성과 기대",
+        "content":  "A사가 추진 중인 신규 사업에서 초기 성과가 나타나고 있습니다. 사업이 계획대로 확대될 경우 중장기 성장에 도움이 될 수 있다는 전망이 나오고 있습니다."
+    }
+]

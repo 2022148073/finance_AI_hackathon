@@ -1,0 +1,42 @@
+[
+    {
+        "template_id":  "EXPERT_NEG_01",
+        "source":  "expert",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "전문가 의견",
+        "content":  "A사의 현재 가격에는 향후 성장 기대가 상당 부분 반영되어 있는 것으로 보입니다. 실적 개선이 예상보다 늦어질 경우 단기적인 가격 조정 가능성을 고려할 필요가 있습니다."
+    },
+    {
+        "template_id":  "EXPERT_NEG_02",
+        "source":  "expert",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "전문가 의견",
+        "content":  "최근 사업 환경의 불확실성이 높아지고 있어 A사의 실적 변동 가능성도 커지고 있습니다. 현재 시점에서는 추가 상승보다 위험 관리가 더 중요할 수 있다는 판단입니다."
+    },
+    {
+        "template_id":  "EXPERT_NEG_03",
+        "source":  "expert",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "전문가 의견",
+        "content":  "A사의 장기적인 사업 경쟁력은 유지되고 있지만 단기 수익성에는 부담 요인이 존재합니다. 실적 가시성이 높아질 때까지 보수적인 접근이 필요하다는 분석입니다."
+    },
+    {
+        "template_id":  "EXPERT_NEG_04",
+        "source":  "expert",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "전문가 의견",
+        "content":  "A사의 최근 성장세가 유지되기 위해서는 추가적인 실적 개선이 필요합니다. 현재의 기대 수준을 충족하지 못할 경우 투자 심리가 약화될 가능성이 있다는 평가입니다."
+    },
+    {
+        "template_id":  "EXPERT_NEG_05",
+        "source":  "expert",
+        "sentiment":  "negative",
+        "strength":  1,
+        "title":  "전문가 의견",
+        "content":  "현재 시장 변동성과 A사의 실적 불확실성을 함께 고려하면 위험 대비 기대수익이 이전보다 낮아졌다는 판단입니다. 단기적으로는 신중한 접근이 필요할 수 있습니다."
+    }
+]

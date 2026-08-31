@@ -1,0 +1,42 @@
+[
+    {
+        "template_id":  "COMM_POS_01",
+        "source":  "community",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "투자자 커뮤니티",
+        "content":  "요즘 흐름 보면 생각보다 잘 버티는 것 같아요. 실적도 조금씩 좋아지는 분위기라 저는 당분간 계속 보유해볼 생각입니다."
+    },
+    {
+        "template_id":  "COMM_POS_02",
+        "source":  "community",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "투자자 커뮤니티",
+        "content":  "최근 조정이 있었지만 오히려 가격이 조금 매력적으로 보이네요. 장기적으로 보면 지금 정도는 추가 매수할 만한 구간이라고 생각합니다."
+    },
+    {
+        "template_id":  "COMM_POS_03",
+        "source":  "community",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "투자자 커뮤니티",
+        "content":  "시장 분위기가 조금씩 좋아지는 것 같고 A사도 계속 회복하는 모습이네요. 저는 아직 상승 여력이 남아 있다고 보고 있습니다."
+    },
+    {
+        "template_id":  "COMM_POS_04",
+        "source":  "community",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "투자자 커뮤니티",
+        "content":  "최근 움직임만 보면 불안할 정도는 아닌 것 같아요. 지금은 단기 변동보다 앞으로의 성장 가능성을 보고 가져가도 괜찮다고 생각합니다."
+    },
+    {
+        "template_id":  "COMM_POS_05",
+        "source":  "community",
+        "sentiment":  "positive",
+        "strength":  1,
+        "title":  "투자자 커뮤니티",
+        "content":  "다른 투자자들도 A사를 긍정적으로 보는 분위기가 많네요. 저도 지금 가격에서는 굳이 비중을 줄일 필요는 없다고 보고 있습니다."
+    }
+]

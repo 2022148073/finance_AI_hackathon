@@ -1,0 +1,28 @@
+{
+  "scenario_id": "E1_02",
+  "episode": "E1",
+  "asset": "Asset 1",
+  "prices": [
+    100.0, 100.196464, 101.08055, 101.178782, 102.259332,
+    103.732809, 103.438114, 102.652259, 102.554028, 103.438114,
+    102.554028, 101.571709, 101.964637, 101.866405, 101.375246,
+    100.196464, 100.884086, 101.866405, 103.438114, 103.24165,
+    102.062868, 102.455796, 102.554028, 102.357564, 101.178782,
+    101.768173, 101.768173, 103.143418, 100.884086, 101.178782,
+    103.143418, 101.571709, 100.982318, 100.491159, 100.294695,
+    100.785855, 100.785855, 100.491159, 99.803536, 99.312377,
+    99.115914, 100.392927, 99.017682, 99.214145, 98.91945,
+    99.312377, 101.178782, 100.491159, 100.884086, 102.259332,
+    100.0, 101.866405, 101.669941, 101.178782, 102.062868,
+    101.375246, 102.357564, 101.669941, 102.554028, 102.750491
+  ],
+  "decision_points": [
+    {"decision_point": "E1_DP1", "sequence": 1, "day": 1, "semantic_role": "initial", "response_tag": null, "market_phase": "initial"},
+    {"decision_point": "E1_DP2", "sequence": 2, "day": 6, "semantic_role": "early_movement", "response_tag": "mild_gain", "market_phase": "early_gain"},
+    {"decision_point": "E1_DP3", "sequence": 3, "day": 16, "semantic_role": "reversal", "response_tag": "mild_drawdown", "market_phase": "mild_pullback"},
+    {"decision_point": "E1_DP4", "sequence": 4, "day": 25, "semantic_role": "stable_mid_state", "response_tag": "recovery", "market_phase": "recovery"},
+    {"decision_point": "E1_DP5", "sequence": 5, "day": 40, "semantic_role": "meaningful_movement", "response_tag": "mild_drawdown", "market_phase": "mild_pullback"},
+    {"decision_point": "E1_DP6", "sequence": 6, "day": 45, "semantic_role": "correction", "response_tag": null, "market_phase": "sideways_correction"},
+    {"decision_point": "E1_DP7", "sequence": 7, "day": 60, "semantic_role": "final", "response_tag": "recovery", "market_phase": "recovery"}
+  ]
+}
