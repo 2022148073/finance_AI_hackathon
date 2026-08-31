@@ -18,6 +18,7 @@ if str(BACKEND_DIR) not in sys.path:
 from database import connect
 from main import create_app
 from scenario_store import load_scenarios
+from test_support import complete_survey
 
 
 class RecordingE6Picker:
@@ -49,6 +50,7 @@ class Episode6ApiTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def seed_prior_context(self, user_id: str) -> None:
+        complete_survey(self.client, user_id)
         with closing(connect(self.database_path)) as connection:
             connection.execute(
                 "INSERT INTO sessions (session_id,user_id,episode,scenario_id,"

@@ -1,4 +1,4 @@
-"""Build private Episode 4 scenarios from selected privacy-safe price JSON."""
+"""Rebuild Episode 4 metadata around backend-only private price series."""
 
 from __future__ import annotations
 
@@ -9,11 +9,10 @@ from scenario_market_data import market_data
 
 
 WEB_DIR = Path(__file__).resolve().parents[1]
-SOURCE_DIR = WEB_DIR / "frontend" / "scenarios" / "episode4"
 OUTPUT_DIR = WEB_DIR / "backend" / "scenarios"
 
-# Runtime scenario IDs are independent of source rank. The source mapping is
-# declarative so episode logic never branches on ticker, date, or scenario ID.
+# Runtime scenario IDs are independent of source rank. Legacy source filenames
+# are retained only as inert provenance labels; price data is read from backend.
 SCENARIOS = {
     "E4_V1_01": ("V1/E4_V1_01.json", [1, 21, 28, 31, 40, 51, 60]),
     "E4_V1_02": ("V1/E4_V1_02.json", [1, 21, 30, 37, 49, 55, 60]),
@@ -126,10 +125,9 @@ MARKET_PHASES = {
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     for scenario_id, (relative_source, days) in SCENARIOS.items():
-        source = json.loads(
-            (SOURCE_DIR / relative_source).read_text(encoding="utf-8")
-        )
-        prices = source["series"]["normalized_prices"]
+        output_path = OUTPUT_DIR / f"{scenario_id}.json"
+        source = json.loads(output_path.read_text(encoding="utf-8"))
+        prices = source["prices"]
         if len(prices) != 60 or prices[0] != 100.0:
             raise ValueError(f"Invalid price series: {relative_source}")
         level = scenario_id.split("_")[1]
@@ -157,7 +155,7 @@ def main() -> None:
             "market_data": market_data(prices),
             "decision_points": points,
         }
-        (OUTPUT_DIR / f"{scenario_id}.json").write_text(
+        output_path.write_text(
             json.dumps(output, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )

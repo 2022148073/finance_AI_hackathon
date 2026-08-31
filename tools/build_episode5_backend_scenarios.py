@@ -1,4 +1,4 @@
-"""Build private Episode 5 scenarios from selected normalized-price JSON."""
+"""Rebuild Episode 5 metadata around backend-only private price series."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from scenario_market_data import market_data
 
 
 WEB_DIR = Path(__file__).resolve().parents[1]
-SOURCE_DIR = WEB_DIR / "frontend" / "scenarios" / "episode5"
 OUTPUT_DIR = WEB_DIR / "backend" / "scenarios"
 
 SCENARIOS = {
@@ -28,8 +27,9 @@ ROLES = (
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     for scenario_id, (source_name, days) in SCENARIOS.items():
-        source = json.loads((SOURCE_DIR / source_name).read_text(encoding="utf-8"))
-        prices = [float(value) for value in source["series"]["normalized_prices"]]
+        output_path = OUTPUT_DIR / f"{scenario_id}.json"
+        source = json.loads(output_path.read_text(encoding="utf-8"))
+        prices = [float(value) for value in source["prices"]]
         if len(prices) != 60 or prices[0] != 100.0:
             raise ValueError(f"Invalid price series: {source_name}")
         points = [
@@ -52,7 +52,7 @@ def main() -> None:
             "market_data": market_data(prices),
             "decision_points": points,
         }
-        (OUTPUT_DIR / f"{scenario_id}.json").write_text(
+        output_path.write_text(
             json.dumps(output, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )

@@ -7,8 +7,9 @@ export default function Survey({ questionnaire, disabled, error, onSubmit }) {
   const question = questions[index];
   const answer = answers[question.id];
   const multiple = question.type === "multiple";
+  const hasAnswer = Object.prototype.hasOwnProperty.call(answers, question.id);
   const answered = multiple
-    ? Array.isArray(answer) && answer.length > 0
+    ? hasAnswer && Array.isArray(answer)
     : typeof answer === "string";
   const progress = useMemo(
     () => ((index + 1) / questions.length) * 100,
@@ -65,6 +66,23 @@ export default function Survey({ questionnaire, disabled, error, onSubmit }) {
 
         <fieldset className="survey-options">
           <legend className="visually-hidden">{question.prompt}</legend>
+          {multiple && question.allow_empty && (
+            <label
+              className={`survey-option${hasAnswer && answer.length === 0 ? " selected" : ""}`}
+            >
+              <input
+                type="checkbox"
+                name={`${question.id}_none`}
+                checked={hasAnswer && answer.length === 0}
+                onChange={() =>
+                  setAnswers((current) => ({ ...current, [question.id]: [] }))
+                }
+              />
+              <span>
+                <strong>{question.empty_label}</strong>
+              </span>
+            </label>
+          )}
           {question.options.map((option) => {
             const selected = multiple
               ? (answer ?? []).includes(option.id)

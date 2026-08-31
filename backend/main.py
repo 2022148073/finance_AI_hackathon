@@ -934,23 +934,22 @@ def create_app(
         with closing(connect(database)) as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
+                survey = connection.execute(
+                    "SELECT 1 FROM survey_results WHERE user_id = ?",
+                    (payload.user_id,),
+                ).fetchone()
+                if survey is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Stated-preference survey must be completed before behavioral episodes",
+                    )
                 session = connection.execute(
                     "SELECT * FROM sessions WHERE user_id = ? AND episode = ?",
                     (payload.user_id, episode),
                 ).fetchone()
                 if session is None:
                     routing = None
-                    if episode == "E1":
-                        survey = connection.execute(
-                            "SELECT 1 FROM survey_results WHERE user_id = ?",
-                            (payload.user_id,),
-                        ).fetchone()
-                        if survey is None:
-                            raise HTTPException(
-                                status_code=status.HTTP_409_CONFLICT,
-                                detail="Stated-preference survey must be completed before Episode 1",
-                            )
-                    elif episode == "E2":
+                    if episode == "E2":
                         e1_session = connection.execute(
                             "SELECT episode_status FROM sessions "
                             "WHERE user_id = ? AND episode = 'E1'",

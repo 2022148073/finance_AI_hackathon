@@ -19,6 +19,7 @@ from features import calculate_episode4_features
 from main import create_app
 from routing import route_episode4
 from scenario_store import load_scenarios
+from test_support import complete_survey
 
 
 class Episode4RoutingTests(unittest.TestCase):
@@ -146,6 +147,7 @@ class Episode4ApiTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def seed_completed_e3(self, user_id: str) -> None:
+        complete_survey(self.client, user_id)
         with closing(connect(self.database_path)) as connection:
             connection.execute(
                 "INSERT INTO sessions (session_id,user_id,episode,scenario_id,"
@@ -202,26 +204,15 @@ class Episode4ApiTests(unittest.TestCase):
         }
         self.assertEqual(actual, expected)
 
-        expected_sources = {
-            "E4_V2_01": "V2/E4_V2_01.json",
-            "E4_V2_02": "V2/E4_V2_02.json",
-            "E4_V2_03": "V2/E4_V2_03.json",
-            "E4_V4_01": "V4/E4_V4_01.json",
-            "E4_V4_02": "V4/E4_V4_02.json",
-            "E4_V4_03": "V4/E4_V4_03.json",
-            "E4_V5_01": "V5/E4_V5_01_extension.json",
-            "E4_V5_02": "V5/E4_V5_02_extension.json",
-            "E4_V5_03": "V5/E4_V5_03.json",
-        }
-        frontend_root = BACKEND_DIR.parent / "frontend" / "scenarios" / "episode4"
-        for scenario_id, relative_source in expected_sources.items():
-            source = json.loads(
-                (frontend_root / relative_source).read_text(encoding="utf-8")
+        frontend_root = BACKEND_DIR.parent / "frontend" / "scenarios"
+        self.assertEqual(list(frontend_root.rglob("*.json")), [])
+        self.assertTrue(
+            all(
+                len(scenario.prices) == 60 and scenario.prices[0] == 100.0
+                for scenario in self.scenarios.values()
+                if scenario.episode in {"E1", "E2", "E3", "E4", "E5"}
             )
-            self.assertEqual(
-                list(self.scenarios[scenario_id].prices),
-                [float(value) for value in source["series"]["normalized_prices"]],
-            )
+        )
 
     def test_episode4_market_phase_configuration_only_changes_dp3_to_dp7(self) -> None:
         expected = {

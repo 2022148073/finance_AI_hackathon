@@ -299,7 +299,6 @@ CREATE TABLE IF NOT EXISTS stated_features (
     experience_breadth REAL NOT NULL CHECK (experience_breadth BETWEEN 0 AND 1),
     derivative_experience REAL NOT NULL CHECK (derivative_experience BETWEEN 0 AND 1),
     stated_loss_tolerance REAL NOT NULL CHECK (stated_loss_tolerance BETWEEN 0 AND 1),
-    stated_risk_tolerance REAL NOT NULL CHECK (stated_risk_tolerance BETWEEN 0 AND 1),
     investment_exposure REAL NOT NULL CHECK (investment_exposure BETWEEN 0 AND 1),
     financial_capacity REAL NOT NULL CHECK (financial_capacity BETWEEN 0 AND 1),
     return_seeking REAL NOT NULL CHECK (return_seeking BETWEEN 0 AND 1),
@@ -385,6 +384,14 @@ def _migrate_behavior_events_to_phases(connection: sqlite3.Connection) -> None:
 def initialize_database(database_path: Path) -> None:
     with closing(connect(database_path)) as connection:
         connection.executescript(SCHEMA)
+        stated_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(stated_features)")
+        }
+        if "stated_risk_tolerance" in stated_columns:
+            connection.execute(
+                "ALTER TABLE stated_features DROP COLUMN stated_risk_tolerance"
+            )
         event_columns = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(behavior_events)")

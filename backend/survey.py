@@ -77,7 +77,9 @@ QUESTIONS: tuple[dict[str, Any], ...] = (
         "id": "investment_experience",
         "type": "multiple",
         "prompt": "취득 또는 처분해 본 경험이 있는 상품을 모두 선택해 주세요.",
-        "help_text": "복수 선택 가능",
+        "help_text": "복수 선택 가능. 경험이 없다면 별도 항목을 선택해 주세요.",
+        "allow_empty": True,
+        "empty_label": "해당 투자경험 없음",
         "options": (
             {
                 "id": "aggressive",
@@ -215,7 +217,6 @@ class StatedFeatures:
     experience_breadth: float
     derivative_experience: float
     stated_loss_tolerance: float
-    stated_risk_tolerance: float
     investment_exposure: float
     financial_capacity: float
     return_seeking: float
@@ -318,8 +319,10 @@ def validate_raw_answers(raw_answers: Any) -> dict[str, str | list[str]]:
         value = raw_answers[question_id]
         allowed = {option["id"] for option in question["options"]}
         if question["type"] == "multiple":
-            if not isinstance(value, list) or isinstance(value, str) or not value:
-                raise SurveyValidationError(f"{question_id} must be a non-empty array")
+            if not isinstance(value, list) or isinstance(value, str):
+                raise SurveyValidationError(f"{question_id} must be an array")
+            if not value and not question.get("allow_empty", False):
+                raise SurveyValidationError(f"{question_id} must not be empty")
             if any(not isinstance(item, str) for item in value):
                 raise SurveyValidationError(f"{question_id} contains an invalid option")
             if len(value) != len(set(value)):
@@ -346,11 +349,12 @@ def calculate_stated_features(
     features = StatedFeatures(
         risk_capacity_age=AGE_VALUES[str(answers["age_group"])],
         investment_horizon=HORIZON_VALUES[str(answers["investment_horizon"])],
-        risky_asset_experience=max(EXPERIENCE_VALUES[item] for item in selected),
+        risky_asset_experience=(
+            max(EXPERIENCE_VALUES[item] for item in selected) if selected else 0.0
+        ),
         experience_breadth=len(selected) / len(EXPERIENCE_VALUES),
         derivative_experience=DERIVATIVE_VALUES[str(answers["derivative_experience"])],
         stated_loss_tolerance=loss_value,
-        stated_risk_tolerance=loss_value,
         investment_exposure=EXPOSURE_VALUES[str(answers["investment_asset_ratio"])],
         financial_capacity=INCOME_VALUES[str(answers["monthly_income"])],
         return_seeking=PURPOSE_VALUES[str(answers["investment_purpose"])],
@@ -387,7 +391,7 @@ def calculate_survey_score(raw_answers: dict[str, Any]) -> float:
         answer = answers[question_id]
         if question_id == "investment_experience":
             assert isinstance(answer, list)
-            earned += max(points[item] for item in answer)
+            earned += max((points[item] for item in answer), default=0)
         else:
             earned += points[str(answer)]
     return round(earned / MAX_SURVEY_POINTS * 100.0, 6)

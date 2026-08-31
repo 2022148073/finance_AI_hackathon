@@ -20,6 +20,7 @@ from database import connect
 from main import create_app
 from scenario_store import load_scenarios
 from stimulus_store import POLARITY_CYCLES, SOURCE_PAIRS
+from test_support import complete_survey
 
 
 class Episode5ApiTests(unittest.TestCase):
@@ -42,6 +43,7 @@ class Episode5ApiTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def seed_completed_e4(self, user_id: str, final_share: float = 0.60) -> None:
+        complete_survey(self.client, user_id)
         session_id = f"e4-{user_id}"
         with closing(connect(self.database_path)) as connection:
             connection.execute(

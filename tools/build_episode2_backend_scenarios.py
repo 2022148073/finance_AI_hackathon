@@ -1,4 +1,4 @@
-"""Build private Episode 2 scenario JSON files from privacy-safe price JSON."""
+"""Rebuild Episode 2 metadata around backend-only private price series."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from pathlib import Path
 
 
 WEB_DIR = Path(__file__).resolve().parents[1]
-SOURCE_DIR = WEB_DIR / "frontend" / "scenarios" / "episode2"
 OUTPUT_DIR = WEB_DIR / "backend" / "scenarios"
 
 DECISION_DAYS = {
@@ -29,10 +28,9 @@ POINT_METADATA = [
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     for scenario_id, days in DECISION_DAYS.items():
-        source = json.loads(
-            (SOURCE_DIR / f"{scenario_id}.json").read_text(encoding="utf-8")
-        )
-        prices = source["series"]["normalized_prices"]
+        output_path = OUTPUT_DIR / f"{scenario_id}.json"
+        source = json.loads(output_path.read_text(encoding="utf-8"))
+        prices = source["prices"]
         if len(prices) != 60 or prices[0] != 100.0:
             raise ValueError(f"Invalid price series: {scenario_id}")
         points = []
@@ -57,7 +55,7 @@ def main() -> None:
             "prices": prices,
             "decision_points": points,
         }
-        (OUTPUT_DIR / f"{scenario_id}.json").write_text(
+        output_path.write_text(
             json.dumps(output, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
