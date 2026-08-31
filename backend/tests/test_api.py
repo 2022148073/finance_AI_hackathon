@@ -41,6 +41,30 @@ class SequentialEpisodeApiTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def start(self, user_id: str = "test_user") -> dict[str, object]:
+        survey_state = self.client.post(
+            "/api/survey/sessions", json={"user_id": user_id}
+        )
+        self.assertEqual(survey_state.status_code, 200, survey_state.text)
+        if not survey_state.json()["survey_completed"]:
+            survey = self.client.post(
+                "/api/survey/submissions",
+                json={
+                    "user_id": user_id,
+                    "answers": {
+                        "age_group": "age_41_50",
+                        "investment_horizon": "years_1_2",
+                        "investment_experience": ["neutral"],
+                        "derivative_experience": "none_or_under_1_year",
+                        "loss_tolerance": "partial_principal_loss",
+                        "investment_asset_ratio": "up_to_50",
+                        "monthly_income": "up_to_3m",
+                        "investment_purpose": "above_market_return",
+                        "financial_knowledge": "deep",
+                        "vulnerability": "no",
+                    },
+                },
+            )
+            self.assertEqual(survey.status_code, 200, survey.text)
         response = self.client.post(
             "/api/episode1/sessions", json={"user_id": user_id}
         )

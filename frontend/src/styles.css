@@ -22,6 +22,18 @@ input {
   font: inherit;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .app-shell {
   width: min(1120px, calc(100% - 32px));
   margin: 0 auto;
@@ -91,11 +103,109 @@ h2 {
 
 .market-card,
 .allocation-card,
-.completed-card {
+.completed-card,
+.survey-card {
   border: 1px solid #dce3e8;
   border-radius: 18px;
   background: #fff;
   box-shadow: 0 12px 34px rgb(31 50 66 / 7%);
+}
+
+.survey-shell {
+  width: min(820px, calc(100% - 32px));
+}
+
+.survey-card {
+  padding: 30px;
+}
+
+.survey-question-number {
+  margin-bottom: 8px;
+  color: #17765b;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.survey-help {
+  margin-bottom: 18px;
+  color: #74818c;
+  font-size: 13px;
+}
+
+.survey-options {
+  display: grid;
+  gap: 10px;
+  margin: 24px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.survey-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 16px 17px;
+  border: 1px solid #dce3e8;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.survey-option:hover,
+.survey-option.selected {
+  border-color: #4a9a80;
+  background: #f1f8f5;
+}
+
+.survey-option input {
+  margin-top: 3px;
+  accent-color: #17765b;
+}
+
+.survey-option strong,
+.survey-option small {
+  display: block;
+}
+
+.survey-option strong {
+  font-size: 15px;
+}
+
+.survey-option small {
+  margin-top: 5px;
+  color: #687681;
+  line-height: 1.5;
+}
+
+.survey-actions {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.survey-next {
+  margin-top: 0;
+}
+
+.secondary-button {
+  padding: 15px 20px;
+  border: 1px solid #cfd8df;
+  border-radius: 12px;
+  color: #43515d;
+  background: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.secondary-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.survey-confirmation .completed-card {
+  width: min(520px, calc(100% - 32px));
 }
 
 .market-card {
@@ -353,7 +463,8 @@ h2 {
 
   .market-card,
   .allocation-card,
-  .completed-card {
+  .completed-card,
+  .survey-card {
     border-radius: 14px;
   }
 
@@ -362,7 +473,8 @@ h2 {
   }
 
   .allocation-card,
-  .completed-card {
+  .completed-card,
+  .survey-card {
     padding: 20px 16px;
   }
 

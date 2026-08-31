@@ -9,6 +9,10 @@ class StartSessionRequest(BaseModel):
     user_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 
 
+class SurveySubmission(StartSessionRequest):
+    answers: dict[str, str | list[str]]
+
+
 class EntryRiskShareSubmission(BaseModel):
     risk_share: float = Field(ge=0.0, le=1.0)
 

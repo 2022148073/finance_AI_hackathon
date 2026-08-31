@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import Survey from "./Survey.jsx";
 
 const API_BASE = window.__API_BASE_URL__ ?? "http://127.0.0.1:8000";
 
@@ -115,6 +116,8 @@ async function api(path, options = {}) {
 
 export default function App() {
   const [session, setSession] = useState(null);
+  const [questionnaire, setQuestionnaire] = useState(null);
+  const [surveySaved, setSurveySaved] = useState(false);
   const [riskPercent, setRiskPercent] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -138,11 +141,52 @@ export default function App() {
     return current;
   }
 
+  async function beginBehavioralEpisodes() {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await startEpisode(1);
+      const current = await advanceToActiveEpisode(data);
+      setSession(current);
+      setSurveySaved(false);
+    } catch (reason) {
+      setError(reason.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitSurvey(answers) {
+    setSubmitting(true);
+    setError("");
+    try {
+      await api("/api/survey/submissions", {
+        method: "POST",
+        body: JSON.stringify({ user_id: getUserId(), answers }),
+      });
+      setQuestionnaire(null);
+      setSurveySaved(true);
+    } catch (reason) {
+      setError(reason.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   useEffect(() => {
     let active = true;
-    startEpisode(1)
+    api("/api/survey/sessions", {
+      method: "POST",
+      body: JSON.stringify({ user_id: getUserId() }),
+    })
       .then(async (data) => {
-        const current = await advanceToActiveEpisode(data);
+        if (!active) return;
+        if (!data.survey_completed) {
+          setQuestionnaire(data.questionnaire);
+          return;
+        }
+        const episode = await startEpisode(1);
+        const current = await advanceToActiveEpisode(episode);
         if (active) setSession(current);
       })
       .catch((reason) => {
@@ -241,6 +285,36 @@ export default function App() {
 
   if (loading) {
     return <main className="center-message">시나리오를 준비하고 있습니다…</main>;
+  }
+  if (questionnaire) {
+    return (
+      <Survey
+        questionnaire={questionnaire}
+        disabled={submitting}
+        error={error}
+        onSubmit={submitSurvey}
+      />
+    );
+  }
+  if (surveySaved) {
+    return (
+      <main className="center-message survey-confirmation">
+        <section className="completed-card">
+          <p className="eyebrow">SAVED</p>
+          <h2>설문 응답이 저장되었습니다.</h2>
+          <p>다음 단계에서 시장 상황에 따른 선택을 진행합니다.</p>
+          {error && <p className="inline-error">{error}</p>}
+          <button
+            className="submit-button"
+            type="button"
+            disabled={loading}
+            onClick={beginBehavioralEpisodes}
+          >
+            다음 단계 시작
+          </button>
+        </section>
+      </main>
+    );
   }
   if (!session) {
     return <main className="center-message error">{error}</main>;

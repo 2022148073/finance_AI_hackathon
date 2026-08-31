@@ -279,6 +279,62 @@ CREATE TABLE IF NOT EXISTS profile_features (
     cross_context_consistency REAL
 );
 
+CREATE TABLE IF NOT EXISTS survey_responses (
+    survey_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL UNIQUE,
+    questionnaire_version TEXT NOT NULL,
+    source_metadata_json TEXT NOT NULL,
+    raw_answers_json TEXT NOT NULL,
+    submitted_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stated_features (
+    survey_id TEXT PRIMARY KEY REFERENCES survey_responses(survey_id),
+    user_id TEXT NOT NULL UNIQUE,
+    feature_version TEXT NOT NULL,
+    calculated_at TEXT NOT NULL,
+    risk_capacity_age REAL NOT NULL CHECK (risk_capacity_age BETWEEN 0 AND 1),
+    investment_horizon REAL NOT NULL CHECK (investment_horizon BETWEEN 0 AND 1),
+    risky_asset_experience REAL NOT NULL CHECK (risky_asset_experience BETWEEN 0 AND 1),
+    experience_breadth REAL NOT NULL CHECK (experience_breadth BETWEEN 0 AND 1),
+    derivative_experience REAL NOT NULL CHECK (derivative_experience BETWEEN 0 AND 1),
+    stated_loss_tolerance REAL NOT NULL CHECK (stated_loss_tolerance BETWEEN 0 AND 1),
+    stated_risk_tolerance REAL NOT NULL CHECK (stated_risk_tolerance BETWEEN 0 AND 1),
+    investment_exposure REAL NOT NULL CHECK (investment_exposure BETWEEN 0 AND 1),
+    financial_capacity REAL NOT NULL CHECK (financial_capacity BETWEEN 0 AND 1),
+    return_seeking REAL NOT NULL CHECK (return_seeking BETWEEN 0 AND 1),
+    financial_literacy REAL NOT NULL CHECK (financial_literacy BETWEEN 0 AND 1),
+    vulnerability_flag INTEGER NOT NULL CHECK (vulnerability_flag IN (0,1))
+);
+
+CREATE TABLE IF NOT EXISTS survey_results (
+    survey_id TEXT PRIMARY KEY REFERENCES survey_responses(survey_id),
+    user_id TEXT NOT NULL UNIQUE,
+    scoring_version TEXT NOT NULL,
+    scoring_basis TEXT NOT NULL,
+    score REAL NOT NULL CHECK (score BETWEEN 0 AND 100),
+    profile TEXT NOT NULL CHECK (
+        profile IN ('안정형','안정추구형','위험중립형','적극투자형','공격투자형')
+    ),
+    calculated_at TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS survey_responses_no_update
+BEFORE UPDATE ON survey_responses
+BEGIN SELECT RAISE(ABORT, 'survey_responses are append-only'); END;
+
+CREATE TRIGGER IF NOT EXISTS survey_responses_no_delete
+BEFORE DELETE ON survey_responses
+BEGIN SELECT RAISE(ABORT, 'survey_responses are append-only'); END;
+
+CREATE TRIGGER IF NOT EXISTS stated_features_no_update
+BEFORE UPDATE ON stated_features
+BEGIN SELECT RAISE(ABORT, 'stated_features are immutable'); END;
+
+CREATE TRIGGER IF NOT EXISTS survey_results_no_update
+BEFORE UPDATE ON survey_results
+BEGIN SELECT RAISE(ABORT, 'survey_results are immutable'); END;
+
 CREATE TRIGGER IF NOT EXISTS behavior_events_no_update
 BEFORE UPDATE ON behavior_events
 BEGIN SELECT RAISE(ABORT, 'behavior_events are append-only'); END;

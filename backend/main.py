@@ -43,8 +43,22 @@ from schemas import (
     Episode5PostSubmission,
     Episode5PreSubmission,
     StartSessionRequest,
+    SurveySubmission,
 )
 from stimulus_store import POLARITY_CYCLES, Randomizer, SOURCE_PAIRS, StimulusStore
+from survey import (
+    QUESTIONNAIRE_VERSION,
+    SCORING_BASIS,
+    SCORING_VERSION,
+    SOURCE_METADATA,
+    STATED_FEATURE_VERSION,
+    SurveyValidationError,
+    calculate_stated_features,
+    calculate_survey_score,
+    classify_survey_profile,
+    public_questionnaire,
+    validate_raw_answers,
+)
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -812,6 +826,102 @@ def create_app(
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @application.post("/api/survey/sessions")
+    def start_survey(
+        payload: StartSessionRequest,
+        request: Request,
+    ) -> dict[str, object]:
+        """Restore completion state without disclosing any calculated result."""
+        with closing(connect(Path(request.app.state.database_path))) as connection:
+            completed = connection.execute(
+                "SELECT 1 FROM survey_results WHERE user_id = ?",
+                (payload.user_id,),
+            ).fetchone() is not None
+        response: dict[str, object] = {"survey_completed": completed}
+        if not completed:
+            response["questionnaire"] = public_questionnaire()
+        return response
+
+    @application.post("/api/survey/submissions")
+    def submit_survey(
+        payload: SurveySubmission,
+        request: Request,
+    ) -> dict[str, bool]:
+        """Persist immutable raw/stated/scoring records; reveal success only."""
+        try:
+            answers = validate_raw_answers(payload.answers)
+            features = calculate_stated_features(answers)
+            score = calculate_survey_score(answers)
+            profile = classify_survey_profile(score)
+        except SurveyValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        database = Path(request.app.state.database_path)
+        with closing(connect(database)) as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                if connection.execute(
+                    "SELECT 1 FROM survey_responses WHERE user_id = ?",
+                    (payload.user_id,),
+                ).fetchone() is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Survey has already been submitted",
+                    )
+                survey_id = str(uuid.uuid4())
+                now = _utc_now()
+                connection.execute(
+                    "INSERT INTO survey_responses (survey_id,user_id,"
+                    "questionnaire_version,source_metadata_json,raw_answers_json,"
+                    "submitted_at) VALUES (?,?,?,?,?,?)",
+                    (
+                        survey_id,
+                        payload.user_id,
+                        QUESTIONNAIRE_VERSION,
+                        json.dumps(SOURCE_METADATA, ensure_ascii=False),
+                        json.dumps(answers, ensure_ascii=False),
+                        now,
+                    ),
+                )
+                feature_values = features.as_dict()
+                feature_columns = tuple(feature_values)
+                connection.execute(
+                    "INSERT INTO stated_features (survey_id,user_id,feature_version,"
+                    "calculated_at," + ",".join(feature_columns) + ") VALUES (" +
+                    ",".join("?" for _ in range(4 + len(feature_columns))) + ")",
+                    (
+                        survey_id,
+                        payload.user_id,
+                        STATED_FEATURE_VERSION,
+                        now,
+                        *(feature_values[column] for column in feature_columns),
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO survey_results (survey_id,user_id,scoring_version,"
+                    "scoring_basis,score,profile,calculated_at) VALUES (?,?,?,?,?,?,?)",
+                    (
+                        survey_id,
+                        payload.user_id,
+                        SCORING_VERSION,
+                        SCORING_BASIS,
+                        score,
+                        profile,
+                        now,
+                    ),
+                )
+                connection.commit()
+            except HTTPException:
+                connection.rollback()
+                raise
+            except sqlite3.IntegrityError as exc:
+                connection.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Survey has already been submitted",
+                ) from exc
+        return {"success": True, "survey_completed": True}
+
     @application.post("/api/{episode_path}/sessions")
     def start_session(
         episode_path: str,
@@ -830,7 +940,17 @@ def create_app(
                 ).fetchone()
                 if session is None:
                     routing = None
-                    if episode == "E2":
+                    if episode == "E1":
+                        survey = connection.execute(
+                            "SELECT 1 FROM survey_results WHERE user_id = ?",
+                            (payload.user_id,),
+                        ).fetchone()
+                        if survey is None:
+                            raise HTTPException(
+                                status_code=status.HTTP_409_CONFLICT,
+                                detail="Stated-preference survey must be completed before Episode 1",
+                            )
+                    elif episode == "E2":
                         e1_session = connection.execute(
                             "SELECT episode_status FROM sessions "
                             "WHERE user_id = ? AND episode = 'E1'",
