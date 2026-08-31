@@ -1,4 +1,4 @@
-"""Generate privacy-safe web JSON for selected Episodes 2 through 6.
+"""Generate privacy-safe frontend JSON for selected Episodes 2 through 5.
 
 Inputs outside web/ are read-only. All generated files stay under
 web/frontend/scenarios/ and contain no ticker, date, or source path.
@@ -20,13 +20,13 @@ SELECTED_CSV = (
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 OUTPUT_ROOT = WEB_ROOT / "frontend" / "scenarios"
 
-TARGET_EPISODES = {"E2", "E3", "E4", "E5", "E6"}
-EXPECTED_EPISODE_COUNTS = {"E2": 3, "E3": 15, "E4": 15, "E5": 3, "E6": 3}
+TARGET_EPISODES = {"E2", "E3", "E4", "E5"}
+EXPECTED_EPISODE_COUNTS = {"E2": 3, "E3": 15, "E4": 15, "E5": 3}
 EXPECTED_LEVEL_COUNTS = {
     **{("E3", f"L{level}"): 3 for level in range(1, 6)},
     **{("E4", f"V{level}"): 3 for level in range(1, 6)},
 }
-EXPECTED_FILE_COUNT = 39
+EXPECTED_FILE_COUNT = 36
 
 
 class ScenarioJsonError(RuntimeError):

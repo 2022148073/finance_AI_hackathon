@@ -68,6 +68,89 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _timer_key(decision_index: int, event_phase: str) -> str:
+    return f"{decision_index}:{event_phase}"
+
+
+def _expected_timer_key(
+    connection: sqlite3.Connection,
+    session: sqlite3.Row,
+    scenario: Scenario,
+) -> str | None:
+    if session["episode_status"] == "completed":
+        return None
+    if scenario.episode == "E3" and not bool(session["entry_confirmed"]):
+        return None
+    logs = fetch_logs(connection, str(session["session_id"]))
+    if scenario.episode == "E5":
+        post_logs = [log for log in logs if log["event_phase"] == "post_information"]
+        decision_index = len(post_logs) + 1
+        pre_exists = any(
+            int(log["decision_index"]) == decision_index
+            and log["event_phase"] == "pre_information"
+            for log in logs
+        )
+        phase = "post_information" if pre_exists else "pre_information"
+        return _timer_key(decision_index, phase)
+    return _timer_key(len(logs) + 1, "allocation")
+
+
+def _ensure_session_timer(
+    connection: sqlite3.Connection,
+    session: sqlite3.Row,
+    scenario: Scenario,
+    now: str | None = None,
+) -> sqlite3.Row:
+    expected_key = _expected_timer_key(connection, session, scenario)
+    current_key = session["decision_timer_key"]
+    started_at = session["decision_started_at"]
+    if expected_key is None:
+        if current_key is not None or started_at is not None:
+            connection.execute(
+                "UPDATE sessions SET decision_timer_key = NULL, "
+                "decision_started_at = NULL WHERE session_id = ?",
+                (session["session_id"],),
+            )
+        else:
+            return session
+    elif current_key != expected_key or started_at is None:
+        connection.execute(
+            "UPDATE sessions SET decision_timer_key = ?, decision_started_at = ? "
+            "WHERE session_id = ?",
+            (expected_key, now or _utc_now(), session["session_id"]),
+        )
+    else:
+        return session
+    updated = connection.execute(
+        "SELECT * FROM sessions WHERE session_id = ?", (session["session_id"],)
+    ).fetchone()
+    assert updated is not None
+    return updated
+
+
+def _elapsed_decision_time_ms(
+    session: sqlite3.Row,
+    expected_key: str,
+    completed_at: str,
+) -> int:
+    if (
+        session["decision_timer_key"] != expected_key
+        or session["decision_started_at"] is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Decision timer is not initialized; restore the session first",
+        )
+    try:
+        started = datetime.fromisoformat(str(session["decision_started_at"]))
+        completed = datetime.fromisoformat(completed_at)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500, detail="Stored decision timer is invalid"
+        ) from exc
+    return max(0, int((completed - started).total_seconds() * 1000))
+
+
 def _episode_code(episode_path: str) -> str:
     episode = EPISODE_PATHS.get(episode_path)
     if episode is None:
@@ -556,7 +639,7 @@ def _episode6_context_for_user(
         (user_id,),
     ).fetchone()
     profile = connection.execute(
-        "SELECT feature_version,volatility_tolerance "
+        "SELECT feature_version "
         "FROM profile_features WHERE user_id = ?",
         (user_id,),
     ).fetchone()
@@ -569,9 +652,6 @@ def _episode6_context_for_user(
         ),
         "pre_e6_e3_loss_resilience_score": (
             None if e3_context is None else e3_context["e3_loss_resilience_score"]
-        ),
-        "pre_e6_volatility_tolerance": (
-            None if profile is None else profile["volatility_tolerance"]
         ),
         "profile_version": None if profile is None else profile["feature_version"],
     }
@@ -875,8 +955,8 @@ def create_app(
                             "e6_assignment_version,pre_e6_risk_engagement_score,"
                             "pre_e6_e3_behavior_resilience_score,"
                             "pre_e6_e3_loss_resilience_score,"
-                            "pre_e6_volatility_tolerance,profile_version) "
-                            "VALUES (?,?,?,?, 'in_progress',?,?,?,?,1,?,?,?,?,?,?)",
+                            "profile_version) "
+                            "VALUES (?,?,?,?, 'in_progress',?,?,?,?,1,?,?,?,?,?)",
                             (
                                 session_id,
                                 payload.user_id,
@@ -892,7 +972,6 @@ def create_app(
                                     "pre_e6_e3_behavior_resilience_score"
                                 ],
                                 e6_context["pre_e6_e3_loss_resilience_score"],
-                                e6_context["pre_e6_volatility_tolerance"],
                                 e6_context["profile_version"],
                             ),
                         )
@@ -906,9 +985,10 @@ def create_app(
                     session = connection.execute(
                         "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
                     ).fetchone()
-                connection.commit()
                 assert session is not None
                 scenario = scenario_map[str(session["scenario_id"])]
+                session = _ensure_session_timer(connection, session, scenario)
+                connection.commit()
                 return _session_state(
                     connection, session, scenario, request.app.state.stimuli
                 )
@@ -922,13 +1002,17 @@ def create_app(
     ) -> dict[str, object]:
         episode = _episode_code(episode_path)
         with closing(connect(Path(request.app.state.database_path))) as connection:
+            connection.execute("BEGIN IMMEDIATE")
             session = connection.execute(
                 "SELECT * FROM sessions WHERE session_id = ? AND episode = ?",
                 (session_id, episode),
             ).fetchone()
             if session is None:
+                connection.rollback()
                 raise HTTPException(status_code=404, detail="Session not found")
             scenario = request.app.state.scenarios[str(session["scenario_id"])]
+            session = _ensure_session_timer(connection, session, scenario)
+            connection.commit()
             return _session_state(
                 connection, session, scenario, request.app.state.stimuli
             )
@@ -962,8 +1046,15 @@ def create_app(
                 now = _utc_now()
                 connection.execute(
                     "UPDATE sessions SET entry_risk_share = ?, entry_confirmed = 1, "
-                    "updated_at = ? WHERE session_id = ?",
-                    (payload.risk_share, now, session_id),
+                    "updated_at = ?, decision_started_at = ?, "
+                    "decision_timer_key = ? WHERE session_id = ?",
+                    (
+                        payload.risk_share,
+                        now,
+                        now,
+                        _timer_key(1, "allocation"),
+                        session_id,
+                    ),
                 )
                 connection.commit()
                 updated = connection.execute(
@@ -995,6 +1086,7 @@ def create_app(
                 if session is None:
                     raise HTTPException(status_code=404, detail="Session not found")
                 scenario = request.app.state.scenarios[str(session["scenario_id"])]
+                session = _ensure_session_timer(connection, session, scenario)
                 logs = fetch_logs(connection, session_id)
                 post_logs = [
                     log for log in logs if log["event_phase"] == "post_information"
@@ -1029,6 +1121,11 @@ def create_app(
                     else float(post_logs[-1]["risk_share_after"])
                 )
                 now = _utc_now()
+                decision_time_ms = _elapsed_decision_time_ms(
+                    session,
+                    _timer_key(expected_index, "pre_information"),
+                    now,
+                )
                 _insert_e5_event(
                     connection,
                     session=session,
@@ -1045,12 +1142,18 @@ def create_app(
                     pre_information_delta=payload.risk_share_pre_info - risk_before,
                     information_delta=None,
                     aligned_source=None,
-                    decision_time_ms=payload.decision_time_ms,
+                    decision_time_ms=decision_time_ms,
                     now=now,
                 )
                 connection.execute(
-                    "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
-                    (now, session_id),
+                    "UPDATE sessions SET updated_at = ?, decision_started_at = ?, "
+                    "decision_timer_key = ? WHERE session_id = ?",
+                    (
+                        now,
+                        now,
+                        _timer_key(expected_index, "post_information"),
+                        session_id,
+                    ),
                 )
                 _upsert_episode_features(
                     connection, "E5", session_id, now, "in_progress", scenario
@@ -1090,6 +1193,7 @@ def create_app(
                 if session is None:
                     raise HTTPException(status_code=404, detail="Session not found")
                 scenario = request.app.state.scenarios[str(session["scenario_id"])]
+                session = _ensure_session_timer(connection, session, scenario)
                 logs = fetch_logs(connection, session_id)
                 post_logs = [
                     log for log in logs if log["event_phase"] == "post_information"
@@ -1137,8 +1241,13 @@ def create_app(
                         str(assignment["first_source"])
                         if assignment["first_sentiment"] == target_sentiment
                         else str(assignment["second_source"])
-                    )
+                )
                 now = _utc_now()
+                decision_time_ms = _elapsed_decision_time_ms(
+                    session,
+                    _timer_key(expected_index, "post_information"),
+                    now,
+                )
                 _insert_e5_event(
                     connection,
                     session=session,
@@ -1155,15 +1264,28 @@ def create_app(
                     pre_information_delta=float(pre_event["pre_information_delta"]),
                     information_delta=information_delta,
                     aligned_source=aligned_source,
-                    decision_time_ms=payload.decision_time_ms,
+                    decision_time_ms=decision_time_ms,
                     now=now,
                 )
                 completed = expected_index == 3
                 episode_status = "completed" if completed else "in_progress"
+                next_timer_key = (
+                    None
+                    if completed
+                    else _timer_key(expected_index + 1, "pre_information")
+                )
                 connection.execute(
                     "UPDATE sessions SET episode_status = ?, updated_at = ?, "
-                    "completed_at = ? WHERE session_id = ?",
-                    (episode_status, now, now if completed else None, session_id),
+                    "completed_at = ?, decision_started_at = ?, "
+                    "decision_timer_key = ? WHERE session_id = ?",
+                    (
+                        episode_status,
+                        now,
+                        now if completed else None,
+                        None if completed else now,
+                        next_timer_key,
+                        session_id,
+                    ),
                 )
                 _upsert_episode_features(
                     connection,
@@ -1222,6 +1344,7 @@ def create_app(
                     )
 
                 scenario = scenario_map[str(session["scenario_id"])]
+                session = _ensure_session_timer(connection, session, scenario)
                 logs = fetch_logs(connection, session_id)
                 expected = scenario.decision_for_sequence(len(logs) + 1)
                 if payload.scenario_id != _public_scenario_id(scenario):
@@ -1323,6 +1446,11 @@ def create_app(
                     else scenario.volatility_percentile_for_day(expected.day)
                 )
                 now = _utc_now()
+                decision_time_ms = _elapsed_decision_time_ms(
+                    session,
+                    _timer_key(expected.sequence, "allocation"),
+                    now,
+                )
                 connection.execute(
                     "INSERT INTO behavior_events (session_id,episode,scenario_id,"
                     "decision_point,decision_index,day,risk_share_before,"
@@ -1341,7 +1469,7 @@ def create_app(
                         session_id, episode, scenario.scenario_id,
                         expected.decision_point, expected.sequence, expected.day,
                         risk_before, risk_after, 1.0 - risk_after,
-                        risk_after - risk_before, payload.decision_time_ms, price,
+                        risk_after - risk_before, decision_time_ms, price,
                         price / scenario.prices[0] - 1.0, price / peak - 1.0,
                         trailing_return_5d, return_since_previous_dp,
                         abs_return_since_previous_dp,
@@ -1365,10 +1493,23 @@ def create_app(
 
                 completed = expected.sequence == len(scenario.decision_points)
                 episode_status = "completed" if completed else "in_progress"
+                next_timer_key = (
+                    None
+                    if completed
+                    else _timer_key(expected.sequence + 1, "allocation")
+                )
                 connection.execute(
                     "UPDATE sessions SET episode_status = ?, updated_at = ?, "
-                    "completed_at = ? WHERE session_id = ?",
-                    (episode_status, now, now if completed else None, session_id),
+                    "completed_at = ?, decision_started_at = ?, "
+                    "decision_timer_key = ? WHERE session_id = ?",
+                    (
+                        episode_status,
+                        now,
+                        now if completed else None,
+                        None if completed else now,
+                        next_timer_key,
+                        session_id,
+                    ),
                 )
                 _upsert_episode_features(
                     connection,

@@ -28,7 +28,7 @@ class DecisionSubmission(BaseModel):
     decision_point: str = Field(pattern=r"^E[12346]_DP[1-7]$")
     day: int = Field(ge=1, le=60)
     risk_share_after: float = Field(ge=0.0, le=1.0)
-    decision_time_ms: int = Field(ge=0, le=86_400_000)
+    decision_time_ms: int | None = Field(default=None, ge=0, le=86_400_000)
 
     @field_validator("risk_share_after")
     @classmethod
@@ -43,7 +43,7 @@ class _Episode5DecisionSubmission(BaseModel):
     scenario_id: str = Field(pattern=r"^E5_0[1-3]$")
     decision_point: str = Field(pattern=r"^E5_DP[1-3]$")
     day: int = Field(ge=1, le=60)
-    decision_time_ms: int = Field(ge=0, le=86_400_000)
+    decision_time_ms: int | None = Field(default=None, ge=0, le=86_400_000)
 
     @staticmethod
     def _validate_share(value: float) -> float:

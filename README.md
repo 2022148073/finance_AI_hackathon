@@ -228,8 +228,9 @@ E6는 `E6_01`~`E6_03` 중 하나를 동일 확률로 한 번만 배정하고 ses
 비중을 상속하지 않고 위험자산 0%에서 DP1을 시작합니다.
 
 - 시나리오별 가격과 DP days/semantic role은 서버의 `E6_*.json` 설정으로 관리합니다.
-- E6 시작 전 E3 routing score, E3 behavior/loss resilience, profile의 기존
-  `volatility_tolerance` 및 profile version을 session snapshot으로 저장합니다.
+- E6 시작 전 E3 routing score, E3 behavior/loss resilience 및 profile version을
+  session snapshot으로 저장합니다. E4 volatility tolerance는 anchor 비교에
+  사용하지 않습니다.
 - 전체 exposure AUC는 DP allocation을 piecewise constant로 적용하고 Day 1~60의
   59개 interval로 나눕니다.
 - E6 behavior resilience는 E3와 같은 retention/reduction/threshold/recovery
@@ -239,6 +240,10 @@ E6는 `E6_01`~`E6_03` 중 하나를 동일 확률로 한 번만 배정하고 ses
   판단시간 중앙값입니다.
 - E6가 완료되고 두 consistency 값이 모두 유효하면 계산된
   `cross_context_consistency`를 `profile_features`에도 반영합니다.
+- decision time은 브라우저 값이 아니라 서버가 session에 저장한 DP/phase 시작
+  시각으로 계산합니다. 새로고침과 session 복원은 기존 시작 시각을 유지합니다.
+- E6의 전체 60일 가격은 `backend/scenarios/E6_*.json`에만 존재하며 frontend에는
+  현재 DP까지 API가 공개한 가격만 전달됩니다.
 
 ## 검증
 

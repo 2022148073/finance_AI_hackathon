@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -70,7 +71,7 @@ class Episode6ApiTests(unittest.TestCase):
             )
             connection.execute(
                 "INSERT INTO profile_features (user_id,feature_version,computed_at,"
-                "volatility_tolerance) VALUES (?,'pre_profile_v1','now',0.65)",
+                "cross_context_consistency) VALUES (?,'pre_profile_v1','now',NULL)",
                 (user_id,),
             )
             connection.commit()
@@ -144,8 +145,52 @@ class Episode6ApiTests(unittest.TestCase):
             self.assertAlmostEqual(
                 session["pre_e6_e3_loss_resilience_score"], 0.42
             )
-            self.assertAlmostEqual(session["pre_e6_volatility_tolerance"], 0.65)
             self.assertEqual(session["profile_version"], "pre_profile_v1")
+            session_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(sessions)")
+            }
+            self.assertNotIn("pre_e6_volatility_tolerance", session_columns)
+
+        timer_started = (
+            datetime.now(timezone.utc) - timedelta(seconds=20)
+        ).isoformat()
+        with closing(connect(self.database_path)) as connection:
+            connection.execute(
+                "UPDATE sessions SET decision_started_at = ? WHERE session_id = ?",
+                (timer_started, state["session_id"]),
+            )
+            connection.commit()
+        restored = self.client.get(
+            f"/api/episode6/sessions/{state['session_id']}"
+        )
+        self.assertEqual(restored.status_code, 200, restored.text)
+        point = restored.json()["next_decision"]
+        decision = self.client.post(
+            f"/api/episode6/sessions/{state['session_id']}/decisions",
+            json={
+                "scenario_id": state["scenario_id"],
+                "decision_point": point["decision_point"],
+                "day": point["day"],
+                "risk_share_after": 0.50,
+            },
+        )
+        self.assertEqual(decision.status_code, 200, decision.text)
+        with closing(connect(self.database_path)) as connection:
+            event = connection.execute(
+                "SELECT decision_time_ms FROM behavior_events "
+                "WHERE session_id = ? AND decision_index = 1",
+                (state["session_id"],),
+            ).fetchone()
+            assert event is not None
+            self.assertGreaterEqual(event["decision_time_ms"], 19_900)
+
+        frontend_e6 = BACKEND_DIR.parent / "frontend" / "scenarios" / "episode6"
+        self.assertEqual(list(frontend_e6.glob("*.json")), [])
+        frontend_source = (
+            BACKEND_DIR.parent / "frontend" / "src" / "App.jsx"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("performance.now", frontend_source)
 
     def test_anchor_logs_features_and_profile_consistency(self) -> None:
         self.picker.selected = "E6_01"
@@ -153,6 +198,15 @@ class Episode6ApiTests(unittest.TestCase):
         scenario = self.scenarios["E6_01"]
         shares = [0.60, 0.60, 0.50, 0.35, 0.40, 0.50, 0.55]
         for point, share in zip(scenario.decision_points, shares):
+            timer_started = (
+                datetime.now(timezone.utc) - timedelta(seconds=point.sequence)
+            ).isoformat()
+            with closing(connect(self.database_path)) as connection:
+                connection.execute(
+                    "UPDATE sessions SET decision_started_at = ? WHERE session_id = ?",
+                    (timer_started, state["session_id"]),
+                )
+                connection.commit()
             response = self.client.post(
                 f"/api/episode6/sessions/{state['session_id']}/decisions",
                 json={
@@ -160,7 +214,6 @@ class Episode6ApiTests(unittest.TestCase):
                     "decision_point": point.decision_point,
                     "day": point.day,
                     "risk_share_after": share,
-                    "decision_time_ms": point.sequence * 1000,
                 },
             )
             self.assertEqual(response.status_code, 200, response.text)
@@ -244,9 +297,15 @@ class Episode6ApiTests(unittest.TestCase):
             self.assertAlmostEqual(features["anchor_early_recovery_response"], 0.05)
             self.assertAlmostEqual(features["anchor_late_recovery_response"], 0.10)
             self.assertAlmostEqual(features["anchor_final_vs_entry_change"], -0.05)
-            self.assertEqual(features["anchor_decision_time_median"], 4000)
-            self.assertEqual(features["anchor_max_drawdown_decision_time"], 4000)
-            self.assertEqual(features["anchor_recovery_decision_time"], 5500)
+            self.assertAlmostEqual(
+                features["anchor_decision_time_median"], 4000, delta=150
+            )
+            self.assertAlmostEqual(
+                features["anchor_max_drawdown_decision_time"], 4000, delta=150
+            )
+            self.assertAlmostEqual(
+                features["anchor_recovery_decision_time"], 5500, delta=150
+            )
 
             profile = connection.execute(
                 "SELECT * FROM profile_features WHERE user_id = 'feature_user'"

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -161,6 +162,18 @@ class Episode5ApiTests(unittest.TestCase):
         ):
             point = state["next_decision"]
             reveal_before = list(state["price_series"])
+            with closing(connect(self.database_path)) as connection:
+                connection.execute(
+                    "UPDATE sessions SET decision_started_at = ? WHERE session_id = ?",
+                    (
+                        (
+                            datetime.now(timezone.utc)
+                            - timedelta(milliseconds=pre_time)
+                        ).isoformat(),
+                        state["session_id"],
+                    ),
+                )
+                connection.commit()
             pre_response = self.client.post(
                 f"/api/episode5/sessions/{state['session_id']}/pre-decisions",
                 json={
@@ -168,7 +181,7 @@ class Episode5ApiTests(unittest.TestCase):
                     "decision_point": point["decision_point"],
                     "day": point["day"],
                     "risk_share_pre_info": pre_share,
-                    "decision_time_ms": pre_time,
+                    "decision_time_ms": 1,
                 },
             )
             self.assertEqual(pre_response.status_code, 200, pre_response.text)
@@ -188,6 +201,19 @@ class Episode5ApiTests(unittest.TestCase):
                 restored.json()["stimulus_cards"], post_state["stimulus_cards"]
             )
 
+            with closing(connect(self.database_path)) as connection:
+                connection.execute(
+                    "UPDATE sessions SET decision_started_at = ? WHERE session_id = ?",
+                    (
+                        (
+                            datetime.now(timezone.utc)
+                            - timedelta(milliseconds=post_time)
+                        ).isoformat(),
+                        state["session_id"],
+                    ),
+                )
+                connection.commit()
+
             post_response = self.client.post(
                 f"/api/episode5/sessions/{state['session_id']}/post-decisions",
                 json={
@@ -195,7 +221,7 @@ class Episode5ApiTests(unittest.TestCase):
                     "decision_point": point["decision_point"],
                     "day": point["day"],
                     "risk_share_post_info": post_share,
-                    "decision_time_ms": post_time,
+                    "decision_time_ms": 1,
                 },
             )
             self.assertEqual(post_response.status_code, 200, post_response.text)
@@ -268,9 +294,15 @@ class Episode5ApiTests(unittest.TestCase):
                     features[f"{source}_alignment_magnitude"], expected
                 )
             self.assertAlmostEqual(sum(expected_magnitudes.values()), 0.30)
-            self.assertEqual(features["pre_information_decision_time_median"], 3000)
-            self.assertEqual(features["post_information_decision_time_median"], 4000)
-            self.assertEqual(features["information_decision_time_change"], 1000)
+            self.assertAlmostEqual(
+                features["pre_information_decision_time_median"], 3000, delta=150
+            )
+            self.assertAlmostEqual(
+                features["post_information_decision_time_median"], 4000, delta=150
+            )
+            self.assertAlmostEqual(
+                features["information_decision_time_change"], 1000, delta=300
+            )
 
     def test_post_before_pre_and_duplicate_pre_are_rejected(self) -> None:
         state = self.start_e5("order_user")

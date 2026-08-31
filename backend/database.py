@@ -53,8 +53,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     pre_e6_risk_engagement_score REAL,
     pre_e6_e3_behavior_resilience_score REAL,
     pre_e6_e3_loss_resilience_score REAL,
-    pre_e6_volatility_tolerance REAL,
     profile_version TEXT,
+    decision_started_at TEXT,
+    decision_timer_key TEXT,
     UNIQUE (user_id, episode)
 );
 
@@ -363,6 +364,14 @@ def initialize_database(database_path: Path) -> None:
         session_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(sessions)")
         }
+        if "pre_e6_volatility_tolerance" in session_columns:
+            connection.execute(
+                "ALTER TABLE sessions DROP COLUMN pre_e6_volatility_tolerance"
+            )
+            session_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(sessions)")
+            }
         for column, definition in (
             ("assigned_level", "TEXT"),
             ("routing_score", "REAL"),
@@ -388,8 +397,9 @@ def initialize_database(database_path: Path) -> None:
             ("pre_e6_risk_engagement_score", "REAL"),
             ("pre_e6_e3_behavior_resilience_score", "REAL"),
             ("pre_e6_e3_loss_resilience_score", "REAL"),
-            ("pre_e6_volatility_tolerance", "REAL"),
             ("profile_version", "TEXT"),
+            ("decision_started_at", "TEXT"),
+            ("decision_timer_key", "TEXT"),
         ):
             if column not in session_columns:
                 connection.execute(

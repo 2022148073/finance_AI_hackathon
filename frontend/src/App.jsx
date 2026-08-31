@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const API_BASE = window.__API_BASE_URL__ ?? "http://127.0.0.1:8000";
 
@@ -119,7 +119,6 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const decisionStartedAt = useRef(performance.now());
 
   async function startEpisode(number) {
     return api(`/api/episode${number}/sessions`, {
@@ -160,7 +159,6 @@ export default function App() {
   useEffect(() => {
     if (!session) return;
     setRiskPercent(Math.round(session.current_risk_share * 100));
-    decisionStartedAt.current = performance.now();
   }, [session?.next_decision?.decision_point, session?.interaction_phase]);
 
   const latestPoint = session?.price_series?.at(-1);
@@ -177,10 +175,6 @@ export default function App() {
     const point = session.next_decision;
     try {
       const episodeNumber = session.episode.slice(1);
-      const decisionTime = Math.max(
-        0,
-        Math.round(performance.now() - decisionStartedAt.current),
-      );
       let updated;
       if (session.episode === "E5") {
         const isPre = session.interaction_phase === "pre_information";
@@ -194,7 +188,6 @@ export default function App() {
               day: point.day,
               [isPre ? "risk_share_pre_info" : "risk_share_post_info"]:
                 riskPercent / 100,
-              decision_time_ms: decisionTime,
             }),
           },
         );
@@ -208,7 +201,6 @@ export default function App() {
               decision_point: point.decision_point,
               day: point.day,
               risk_share_after: riskPercent / 100,
-              decision_time_ms: decisionTime,
             }),
           },
         );
@@ -259,11 +251,7 @@ export default function App() {
       <header className="page-header">
         <div>
           <p className="eyebrow">EPISODE {session.episode.slice(1)}</p>
-          <h1>
-            {{ E1: "시장 참여 결정", E2: "상승장 투자 결정", E3: "손실 대응 결정", E4: "변동성 대응 결정", E5: "외부 정보 대응 결정", E6: "공통 시장 확인" }[
-              session.episode
-            ]}
-          </h1>
+          <h1>투자 비중 결정</h1>
           <p className="subtitle">
             현재까지 공개된 가격을 보고 위험자산 비중을 선택해 주세요.
           </p>
@@ -297,12 +285,12 @@ export default function App() {
           <div className="decision-heading">
             <div>
               <p className="eyebrow">ENTRY SETUP</p>
-              <h2>Episode 3 시작 위험자산 비중</h2>
+              <h2>시작 위험자산 비중</h2>
             </div>
             <span className="step-badge">5% 단위</span>
           </div>
           <p className="subtitle">
-            손실 대응 시나리오가 시작되기 전 초기 투자 비중을 확정해 주세요.
+            다음 시장 구간이 시작되기 전 초기 투자 비중을 확정해 주세요.
           </p>
           <input
             className="allocation-slider"
@@ -331,7 +319,7 @@ export default function App() {
             disabled={submitting}
             onClick={confirmEpisode3Entry}
           >
-            {submitting ? "저장 중…" : "이 비중으로 Episode 3 시작"}
+            {submitting ? "저장 중…" : "이 비중으로 시작"}
           </button>
         </section>
       ) : session.episode_status === "completed" ? (
