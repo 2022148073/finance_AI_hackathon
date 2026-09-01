@@ -1,11 +1,14 @@
-"""Build one completed user's privacy-minimized LLM analysis input.
+"""Build privacy-minimized, two-stage LLM inputs for one completed user.
 
-This module is intentionally read-only with respect to experiment.db. It does
-not import or modify survey, routing, episode, or feature-calculation logic.
+Stage 1 (behavioral) never loads stated-preference values into the payload.
+After the LLM returns ordinal behavioral dimensions, Python deterministically
+calculates the revealed risk score/profile. Stage 2 (comparison) receives only
+the fixed revealed result and stated preference.
 
 Usage:
-    python build_llm_input.py --user-id USER_ID
-    python build_llm_input.py --user-id USER_ID --output path/to/input.json
+    python build_llm_input.py --stage behavioral --user-id USER_ID
+    python build_llm_input.py --stage comparison --user-id USER_ID \
+        --revealed-result revealed_dimensions.json
 """
 
 from __future__ import annotations
@@ -16,44 +19,22 @@ import os
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Iterable
+from statistics import mean
+from typing import Any, Iterable, Mapping
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
 DEFAULT_DATABASE_PATH = BACKEND_DIR / "data" / "experiment.db"
 DEFAULT_OUTPUT_PATH = BACKEND_DIR / "data" / "user_analysis_input.json"
+DEFAULT_FEATURE_GUIDE_PATH = BACKEND_DIR / "data" / "llm_feature_guide.json"
+DEFAULT_MANIFEST_PATH = BACKEND_DIR / "feature_schema_manifest.json"
 EPISODES = ("E1", "E2", "E3", "E4", "E5", "E6")
 FEATURE_TABLES = {episode: f"{episode.lower()}_features" for episode in EPISODES}
 
-STATED_FEATURE_FIELDS = (
-    "risk_capacity_age",
-    "investment_horizon",
-    "risky_asset_experience",
-    "experience_breadth",
-    "derivative_experience",
-    "stated_loss_tolerance",
-    "investment_exposure",
-    "financial_capacity",
-    "return_seeking",
-    "financial_literacy",
-)
-
-FEATURE_METADATA_FIELDS = {
-    "session_id",
-    "survey_id",
-    "user_id",
-    "feature_version",
-    "computed_at",
-    "calculated_at",
-    "episode_status",
-}
-
 BOOLEAN_FIELDS = {
-    "never_entered",
     "floor_reached",
     "e4_routing_fallback",
     "e4_upper_level_capped",
-    "vulnerability_flag",
 }
 
 COMMON_DECISION_FIELDS = (
@@ -99,7 +80,289 @@ MARKET_SNAPSHOT_FIELDS = (
 
 
 class LlmInputBuildError(RuntimeError):
-    """Raised when a user is incomplete or stored data is inconsistent."""
+    """Raised when source data, manifest, or an LLM stage result is invalid."""
+
+
+def load_feature_manifest(manifest_path: Path = DEFAULT_MANIFEST_PATH) -> dict[str, Any]:
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise LlmInputBuildError(f"Feature manifest does not exist: {manifest_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise LlmInputBuildError(f"Invalid feature manifest JSON: {manifest_path}") from exc
+
+    required_top_level = {
+        "schema_version",
+        "feature_schema_version",
+        "feature_selection_schema_version",
+        "input_schema_versions",
+        "policy",
+        "revealed_profile_scoring",
+        "behavioral_dimension_rubrics",
+        "stated_preference",
+        "episodes",
+    }
+    missing = required_top_level - set(manifest)
+    if missing:
+        raise LlmInputBuildError(
+            "Feature manifest is missing: " + ", ".join(sorted(missing))
+        )
+    if set(manifest["episodes"]) != set(EPISODES):
+        raise LlmInputBuildError("Feature manifest must define exactly E1 through E6")
+    if set(manifest["input_schema_versions"]) != {"behavioral", "comparison"}:
+        raise LlmInputBuildError(
+            "Manifest input_schema_versions must define behavioral and comparison"
+        )
+
+    stated_specification = manifest["stated_preference"]
+    if not isinstance(stated_specification.get("feature_version"), str):
+        raise LlmInputBuildError("Stated-preference feature_version is required")
+    stated_definitions = stated_specification.get("features")
+    if not isinstance(stated_definitions, dict) or not stated_definitions:
+        raise LlmInputBuildError("Stated-preference feature definitions are required")
+    included_stated = _included_stated_feature_names(manifest)
+    if not included_stated:
+        raise LlmInputBuildError("No stated-preference features are included for LLM")
+    for name, definition in stated_definitions.items():
+        if type(definition.get("include_in_llm")) is not bool:
+            raise LlmInputBuildError(
+                f"stated_preference.{name} must explicitly define include_in_llm"
+            )
+        if not isinstance(definition.get("meaning"), str):
+            raise LlmInputBuildError(
+                f"stated_preference.{name} meaning is required"
+            )
+        if definition["include_in_llm"] is True and not isinstance(
+            definition.get("direction"), str
+        ):
+            raise LlmInputBuildError(
+                f"stated_preference.{name} direction is required when included"
+            )
+        if definition["include_in_llm"] is False and not isinstance(
+            definition.get("exclusion_reason"), str
+        ):
+            raise LlmInputBuildError(
+                f"stated_preference.{name} exclusion_reason is required when excluded"
+            )
+
+    for episode in EPISODES:
+        specification = manifest["episodes"][episode]
+        if not isinstance(specification.get("feature_version"), str):
+            raise LlmInputBuildError(f"{episode} manifest feature_version is required")
+        features = specification.get("features")
+        if not isinstance(features, dict) or not features:
+            raise LlmInputBuildError(f"{episode} manifest features are required")
+        included = _included_feature_names(manifest, episode)
+        if not included:
+            raise LlmInputBuildError(f"{episode} has no LLM-included features")
+        for name in included:
+            definition = features[name]
+            if not isinstance(definition.get("meaning"), str) or not isinstance(
+                definition.get("direction"), str
+            ):
+                raise LlmInputBuildError(
+                    f"{episode}.{name} requires reviewed meaning and direction"
+                )
+
+    scoring = manifest["revealed_profile_scoring"]
+    ordinal_values = scoring.get("ordinal_values")
+    core_dimensions = scoring.get("core_dimensions")
+    modifier_dimensions = scoring.get("modifier_dimensions")
+    bands = scoring.get("profile_bands")
+    if not isinstance(ordinal_values, dict) or not ordinal_values:
+        raise LlmInputBuildError("Manifest ordinal_values are required")
+    if not isinstance(core_dimensions, list) or len(core_dimensions) != 3:
+        raise LlmInputBuildError("Manifest must define three core dimensions")
+    if not isinstance(modifier_dimensions, list):
+        raise LlmInputBuildError("Manifest modifier_dimensions must be a list")
+    if not isinstance(bands, list) or not bands:
+        raise LlmInputBuildError("Manifest profile_bands are required")
+    all_dimensions = set(core_dimensions) | set(modifier_dimensions)
+    rubrics = manifest["behavioral_dimension_rubrics"]
+    rubric_dimensions = rubrics.get("dimensions")
+    if not isinstance(rubric_dimensions, dict) or set(rubric_dimensions) != all_dimensions:
+        raise LlmInputBuildError(
+            "Manifest rubrics must exactly match core and modifier dimensions"
+        )
+    for dimension, rubric in rubric_dimensions.items():
+        if set(rubric.get("levels", {})) != set(ordinal_values):
+            raise LlmInputBuildError(
+                f"{dimension} rubric levels must match ordinal_values exactly"
+            )
+        if not rubric.get("primary_evidence") or not rubric.get("anchor_calculation"):
+            raise LlmInputBuildError(
+                f"{dimension} rubric requires primary evidence and anchor calculation"
+            )
+        anchor = rubric.get("anchor")
+        if not isinstance(anchor, dict) or anchor.get("type") not in {
+            "path_value",
+            "weighted_mean",
+        }:
+            raise LlmInputBuildError(
+                f"{dimension} rubric requires a supported machine-readable anchor"
+            )
+        if anchor["type"] == "path_value" and not isinstance(
+            anchor.get("path"), str
+        ):
+            raise LlmInputBuildError(f"{dimension} path_value anchor requires path")
+        if anchor["type"] == "weighted_mean":
+            inputs = anchor.get("inputs")
+            if not isinstance(inputs, list) or not inputs or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("path"), str)
+                or not isinstance(item.get("weight"), (int, float))
+                or float(item["weight"]) <= 0
+                for item in inputs
+            ):
+                raise LlmInputBuildError(
+                    f"{dimension} weighted_mean anchor inputs are invalid"
+                )
+        cutoffs = rubric.get("cutoffs")
+        if not isinstance(cutoffs, list) or [
+            cutoff.get("level") for cutoff in cutoffs
+        ] != list(ordinal_values):
+            raise LlmInputBuildError(
+                f"{dimension} machine cutoffs must follow ordinal_values order"
+            )
+        previous: Mapping[str, Any] | None = None
+        for cutoff in cutoffs:
+            required_cutoff_fields = {
+                "level", "min", "max", "min_inclusive", "max_inclusive"
+            }
+            if not required_cutoff_fields <= set(cutoff) or not isinstance(
+                cutoff["min"], (int, float)
+            ) or not isinstance(cutoff["max"], (int, float)):
+                raise LlmInputBuildError(
+                    f"{dimension} cutoff is not machine-readable"
+                )
+            if float(cutoff["min"]) > float(cutoff["max"]):
+                raise LlmInputBuildError(
+                    f"{dimension} cutoff min exceeds max"
+                )
+            if previous is not None:
+                if float(previous["max"]) != float(cutoff["min"]):
+                    raise LlmInputBuildError(
+                        f"{dimension} cutoffs contain a gap or overlap"
+                    )
+                if bool(previous["max_inclusive"]) == bool(
+                    cutoff["min_inclusive"]
+                ):
+                    raise LlmInputBuildError(
+                        f"{dimension} cutoff boundary must belong to exactly one level"
+                    )
+            previous = cutoff
+        if not isinstance(rubric.get("max_llm_adjustment_steps"), int) or int(
+            rubric["max_llm_adjustment_steps"]
+        ) < 0:
+            raise LlmInputBuildError(
+                f"{dimension} max_llm_adjustment_steps must be non-negative"
+            )
+    serialized_manifest = json.dumps(manifest, ensure_ascii=False)
+    if "\ufffd" in serialized_manifest:
+        raise LlmInputBuildError(
+            "Feature manifest contains Unicode replacement characters; repair UTF-8 text"
+        )
+    return manifest
+
+
+def _included_feature_names(
+    manifest: Mapping[str, Any], episode: str
+) -> tuple[str, ...]:
+    features = manifest["episodes"][episode]["features"]
+    return tuple(
+        name
+        for name, definition in features.items()
+        if definition.get("include_in_llm") is True
+    )
+
+
+def _included_stated_feature_names(
+    manifest: Mapping[str, Any],
+) -> tuple[str, ...]:
+    definitions = manifest["stated_preference"]["features"]
+    return tuple(
+        name
+        for name, definition in definitions.items()
+        if definition.get("include_in_llm") is True
+    )
+
+
+def build_feature_guide(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the reusable, versioned guide from the canonical manifest."""
+    return {
+        "manifest_schema_version": manifest["schema_version"],
+        "feature_schema_version": manifest["feature_schema_version"],
+        "feature_selection_schema_version": manifest[
+            "feature_selection_schema_version"
+        ],
+        "policy": manifest["policy"],
+        "shared_conventions": {
+            "risk_share_and_allocation_changes": (
+                "0~1 proportion; 0.10 means 10 percentage points"
+            ),
+            "returns_and_drawdowns": "decimal returns; -0.05 means -5%",
+            "decision_time": "milliseconds",
+            "null": "not observed or not validly calculable; never substitute zero",
+            "evidence_rule": (
+                "Composite values and their components are one evidence chain "
+                "and must not be counted independently."
+            ),
+        },
+        "common_decision_fields": {
+            "risk_share_before": "risk allocation immediately before the decision",
+            "risk_share_after": "risk allocation selected at the decision",
+            "delta_risk_share": "risk_share_after - risk_share_before",
+            "normalized_price": "current price with Day 1 normalized to 100",
+            "return_from_initial": "return from Day 1 to the current day",
+            "drawdown_from_peak": "decline from the running peak through the current day",
+            "trailing_return_5d": "return over the preceding five trading days",
+            "return_since_previous_dp": "return since the previous decision point",
+            "semantic_role": "preconfigured experimental role of the decision point",
+            "market_phase": "server-defined market-state tag",
+        },
+        "stated_preference": {
+            "feature_version": manifest["stated_preference"]["feature_version"],
+            "features": manifest["stated_preference"]["features"],
+        },
+        "episodes": {
+            f"episode{episode[1:]}": {
+                "feature_version": manifest["episodes"][episode]["feature_version"],
+                "summary_features": {
+                    name: {
+                        key: value
+                        for key, value in manifest["episodes"][episode]["features"][
+                            name
+                        ].items()
+                        if key != "include_in_llm"
+                    }
+                    for name in _included_feature_names(manifest, episode)
+                },
+                **(
+                    {
+                        "adaptive_context": manifest["episodes"][episode][
+                            "adaptive_context"
+                        ]
+                    }
+                    if "adaptive_context" in manifest["episodes"][episode]
+                    else {}
+                ),
+                **(
+                    {
+                        "information_event_fields": manifest["episodes"][episode][
+                            "information_event_fields"
+                        ]
+                    }
+                    if "information_event_fields" in manifest["episodes"][episode]
+                    else {}
+                ),
+            }
+            for episode in EPISODES
+        },
+        "revealed_profile_scoring": manifest["revealed_profile_scoring"],
+        "behavioral_dimension_rubrics": manifest[
+            "behavioral_dimension_rubrics"
+        ],
+    }
 
 
 def _connect_read_only(database_path: Path) -> sqlite3.Connection:
@@ -134,9 +397,14 @@ def _select_fields(row: sqlite3.Row, fields: Iterable[str]) -> dict[str, Any]:
 def _completed_sessions(
     connection: sqlite3.Connection, user_id: str
 ) -> dict[str, sqlite3.Row]:
+    survey = connection.execute(
+        "SELECT 1 FROM survey_results WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    if survey is None:
+        raise LlmInputBuildError("Completed stated-preference survey is required")
+
     rows = connection.execute(
-        "SELECT * FROM sessions WHERE user_id = ? ORDER BY episode",
-        (user_id,),
+        "SELECT * FROM sessions WHERE user_id = ? ORDER BY episode", (user_id,)
     ).fetchall()
     sessions = {str(row["episode"]): row for row in rows}
     missing = [episode for episode in EPISODES if episode not in sessions]
@@ -160,26 +428,39 @@ def _completed_sessions(
 
 
 def _stated_preference(
-    connection: sqlite3.Connection, user_id: str
+    connection: sqlite3.Connection,
+    user_id: str,
+    manifest: Mapping[str, Any],
 ) -> dict[str, Any]:
     survey = connection.execute(
-        "SELECT 1 FROM survey_results WHERE user_id = ?", (user_id,)
+        "SELECT score,profile FROM survey_results WHERE user_id = ?", (user_id,)
     ).fetchone()
     stated = connection.execute(
         "SELECT * FROM stated_features WHERE user_id = ?", (user_id,)
     ).fetchone()
     if survey is None or stated is None:
-        raise LlmInputBuildError("Completed survey result and stated features are required")
-    features = _select_fields(stated, STATED_FEATURE_FIELDS)
-    missing = set(STATED_FEATURE_FIELDS) - set(features)
+        raise LlmInputBuildError("Survey result and stated features are required")
+    actual_version = str(stated["feature_version"])
+    expected_version = str(manifest["stated_preference"]["feature_version"])
+    if actual_version != expected_version:
+        raise LlmInputBuildError(
+            "Stated-preference feature version mismatch: "
+            f"DB={actual_version}, manifest={expected_version}. Review stated "
+            "feature meanings and update the canonical manifest before export."
+        )
+    included_fields = _included_stated_feature_names(manifest)
+    features = _select_fields(stated, included_fields)
+    missing = set(included_fields) - set(features)
     if missing:
         raise LlmInputBuildError(
             "Missing stated feature columns: " + ", ".join(sorted(missing))
         )
     return {
+        "feature_version": actual_version,
         "features": features,
-        "investor_protection_metadata": {
-            "vulnerability_flag": bool(stated["vulnerability_flag"])
+        "survey_baseline": {
+            "score": _clean_value("score", survey["score"]),
+            "profile": survey["profile"],
         },
     }
 
@@ -188,24 +469,36 @@ def _summary_features(
     connection: sqlite3.Connection,
     episode: str,
     session_id: str,
-) -> dict[str, Any]:
-    table = FEATURE_TABLES[episode]
+    manifest: Mapping[str, Any],
+) -> tuple[str, dict[str, Any]]:
     row = connection.execute(
-        f"SELECT * FROM {table} WHERE session_id = ?", (session_id,)
+        f"SELECT * FROM {FEATURE_TABLES[episode]} WHERE session_id = ?",
+        (session_id,),
     ).fetchone()
     if row is None or row["episode_status"] != "completed":
         raise LlmInputBuildError(f"Completed {episode} feature row is required")
-    return {
-        field: _clean_value(field, value)
-        for field, value in dict(row).items()
-        if field not in FEATURE_METADATA_FIELDS
-    }
+
+    actual_version = str(row["feature_version"])
+    expected_version = str(manifest["episodes"][episode]["feature_version"])
+    if actual_version != expected_version:
+        raise LlmInputBuildError(
+            f"{episode} feature version mismatch: DB={actual_version}, "
+            f"manifest={expected_version}. Review feature meanings and update the "
+            "canonical manifest before export."
+        )
+
+    allowlist = _included_feature_names(manifest, episode)
+    missing = set(allowlist) - set(row.keys())
+    if missing:
+        raise LlmInputBuildError(
+            f"Missing {episode} allowlisted feature columns: "
+            + ", ".join(sorted(missing))
+        )
+    return actual_version, _select_fields(row, allowlist)
 
 
 def _decision_logs(
-    connection: sqlite3.Connection,
-    episode: str,
-    session_id: str,
+    connection: sqlite3.Connection, episode: str, session_id: str
 ) -> list[dict[str, Any]]:
     rows = connection.execute(
         "SELECT * FROM behavior_events WHERE session_id = ? "
@@ -220,32 +513,23 @@ def _decision_logs(
     return [_select_fields(row, fields) for row in rows]
 
 
-def _adaptive_context(episode: str, session: sqlite3.Row) -> dict[str, Any]:
-    if episode == "E3":
-        fields = (
-            "assigned_level",
-            "routing_score",
-            "scenario_max_drawdown",
-            "entry_risk_share",
-            "allocation_floor",
+def _adaptive_context(
+    episode: str,
+    session: sqlite3.Row,
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    definitions = manifest["episodes"][episode].get("adaptive_context")
+    if not isinstance(definitions, dict) or not definitions:
+        raise LlmInputBuildError(
+            f"{episode} adaptive context is not defined in the manifest"
         )
-    elif episode == "E4":
-        fields = (
-            "assigned_volatility_level",
-            "e4_routing_score",
-            "e4_routing_fallback",
-            "e4_context_gap",
-            "e4_upper_level_capped",
-            "scenario_volatility_60d",
-            "scenario_volatility_20d_min",
-            "scenario_volatility_20d_max",
-            "scenario_volatility_20d_q25",
-            "scenario_volatility_20d_q75",
-            "entry_risk_share",
+    missing = set(definitions) - set(session.keys())
+    if missing:
+        raise LlmInputBuildError(
+            f"Missing {episode} adaptive context columns: "
+            + ", ".join(sorted(missing))
         )
-    else:
-        raise ValueError(f"Adaptive context is not defined for {episode}")
-    return _select_fields(session, fields)
+    return _select_fields(session, definitions)
 
 
 def _parse_json_list(raw_value: Any, field_name: str) -> list[Any]:
@@ -304,7 +588,6 @@ def _information_events(
         if pre["market_snapshot_id"] != post["market_snapshot_id"]:
             raise LlmInputBuildError(f"E5 DP{index} snapshot IDs do not match")
 
-        display_order = _parse_json_list(post["display_order_json"], "display_order_json")
         events.append(
             {
                 "decision_point": post["decision_point"],
@@ -322,7 +605,9 @@ def _information_events(
                 ),
                 "pre_information_decision_time_ms": int(pre["decision_time_ms"]),
                 "sources": _public_sources(post),
-                "display_order": display_order,
+                "display_order": _parse_json_list(
+                    post["display_order_json"], "display_order_json"
+                ),
                 "post_information_allocation": _clean_value(
                     "risk_share_post_info", post["risk_share_post_info"]
                 ),
@@ -336,69 +621,481 @@ def _information_events(
     return events
 
 
-def _analysis_request() -> dict[str, Any]:
-    dimension = {"score": None, "confidence": None, "reason": None}
+def _behavioral_analysis(
+    connection: sqlite3.Connection,
+    sessions: Mapping[str, sqlite3.Row],
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    behavioral: dict[str, Any] = {}
+    for episode in EPISODES:
+        session = sessions[episode]
+        episode_payload: dict[str, Any] = {}
+        if "adaptive_context" in manifest["episodes"][episode]:
+            episode_payload["adaptive_context"] = _adaptive_context(
+                episode, session, manifest
+            )
+        version, summary = _summary_features(
+            connection, episode, str(session["session_id"]), manifest
+        )
+        episode_payload["feature_version"] = version
+        episode_payload["summary_features"] = summary
+        if episode == "E5":
+            episode_payload["information_events"] = _information_events(
+                connection, str(session["session_id"])
+            )
+        else:
+            episode_payload["decisions"] = _decision_logs(
+                connection, episode, str(session["session_id"])
+            )
+        behavioral[f"episode{episode[1:]}"] = episode_payload
+    return behavioral
+
+
+def _resolve_json_path(payload: Mapping[str, Any], path: str) -> Any:
+    value: Any = payload
+    for segment in path.split("."):
+        if not isinstance(value, Mapping) or segment not in value:
+            raise LlmInputBuildError(f"Rubric anchor path does not exist: {path}")
+        value = value[segment]
+    return value
+
+
+def _calculate_anchor_value(
+    payload: Mapping[str, Any], anchor: Mapping[str, Any]
+) -> float | None:
+    anchor_type = anchor["type"]
+    if anchor_type == "path_value":
+        raw_value = _resolve_json_path(payload, str(anchor["path"]))
+        return None if raw_value is None else float(raw_value)
+    if anchor_type == "weighted_mean":
+        weighted_values: list[tuple[float, float]] = []
+        for item in anchor["inputs"]:
+            raw_value = _resolve_json_path(payload, str(item["path"]))
+            if raw_value is not None:
+                weighted_values.append((float(raw_value), float(item["weight"])))
+        if not weighted_values:
+            return None
+        total_weight = sum(weight for _, weight in weighted_values)
+        return sum(value * weight for value, weight in weighted_values) / total_weight
+    raise LlmInputBuildError(f"Unsupported rubric anchor type: {anchor_type}")
+
+
+def _level_from_cutoffs(value: float, rubric: Mapping[str, Any]) -> str:
+    for cutoff in rubric["cutoffs"]:
+        minimum = float(cutoff["min"])
+        maximum = float(cutoff["max"])
+        above_minimum = value >= minimum if cutoff["min_inclusive"] else value > minimum
+        below_maximum = value <= maximum if cutoff["max_inclusive"] else value < maximum
+        if above_minimum and below_maximum:
+            return str(cutoff["level"])
+    raise LlmInputBuildError(
+        f"Quantitative anchor {value} does not match any cutoff for "
+        f"{rubric['rubric_id']}"
+    )
+
+
+def calculate_quantitative_baselines(
+    behavioral_analysis: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Calculate manifest-driven anchors and immutable base levels in Python."""
+    payload = {"behavioral_analysis": behavioral_analysis}
+    baselines: dict[str, dict[str, Any]] = {}
+    rubrics = manifest["behavioral_dimension_rubrics"]["dimensions"]
+    for dimension, rubric in rubrics.items():
+        anchor_value = _calculate_anchor_value(payload, rubric["anchor"])
+        if anchor_value is None:
+            baselines[dimension] = {
+                "rubric_id": rubric["rubric_id"],
+                "classification_status": "insufficient_evidence",
+                "anchor_value": None,
+                "base_level": None,
+                "max_llm_adjustment_steps": rubric[
+                    "max_llm_adjustment_steps"
+                ],
+            }
+            continue
+        baselines[dimension] = {
+            "rubric_id": rubric["rubric_id"],
+            "classification_status": "anchored",
+            "anchor_value": round(anchor_value, 8),
+            "base_level": _level_from_cutoffs(anchor_value, rubric),
+            "max_llm_adjustment_steps": rubric["max_llm_adjustment_steps"],
+        }
+    return baselines
+
+
+def _dimension_output_template(base_level: str | None) -> dict[str, Any]:
     return {
-        "instructions": [
-            "Compare stated preference with revealed behavior without treating either as ground truth.",
-            "Ground every reason in the supplied episode features or decisions.",
-            "Return scores and confidence values between 0 and 1.",
-            "Return JSON only and do not infer a real ticker, date range, or identity.",
-        ],
-        "required_output_format": {
-            "risk_engagement": dict(dimension),
-            "loss_resilience": dict(dimension),
-            "volatility_tolerance": dict(dimension),
-            "information_sensitivity": dict(dimension),
-            "cross_context_consistency": dict(dimension),
-            "revealed_investor_profile": None,
-        },
-        "revealed_investor_profile_allowed_values": [
-            "안정형",
-            "안정추구형",
-            "위험중립형",
-            "적극투자형",
-            "공격투자형",
-        ],
+        "base_level": base_level,
+        "adjustment": None,
+        "confidence_level": None,
+        "reason": None,
+        "evidence_fields": [],
     }
 
 
-def build_llm_input(database_path: Path, user_id: str) -> dict[str, Any]:
-    """Read and validate exactly one completed user's analysis data."""
+def _behavioral_request(
+    manifest: Mapping[str, Any],
+    quantitative_baselines: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    scoring = manifest["revealed_profile_scoring"]
+    dimensions = list(scoring["core_dimensions"]) + list(
+        scoring["modifier_dimensions"]
+    )
+    return {
+        "task": "Infer revealed behavioral dimensions from behavioral evidence only.",
+        "rubric_reference": {
+            "feature_guide": "llm_feature_guide.json",
+            "rubric_version": manifest["behavioral_dimension_rubrics"][
+                "rubric_version"
+            ],
+            "dimension_rubric_ids": {
+                dimension: manifest["behavioral_dimension_rubrics"]["dimensions"][
+                    dimension
+                ]["rubric_id"]
+                for dimension in dimensions
+            },
+        },
+        "strict_input_scope": (
+            "Use behavioral_analysis and the matching feature guide only. "
+            "Stated-preference data is intentionally absent."
+        ),
+        "rules": [
+            "Echo each immutable base_level exactly as supplied.",
+            "Return only an integer adjustment within the rubric's allowed step range.",
+            "Use supporting evidence and raw behavior only to justify -1, 0, or +1 relative to the Python base level.",
+            "Apply the matching pre-defined rubric; do not invent different thresholds.",
+            "Ground each reason in named evidence_fields.",
+            "Do not treat composite features and their components as independent evidence.",
+            "Do not create final levels, a revealed profile, or a numerical risk score; Python calculates them.",
+            "Information sensitivity is descriptive and is not a conservative/aggressive direction.",
+            "Cross-context consistency is a confidence modifier and never changes risk direction.",
+            "Use null rather than zero when evidence is insufficient.",
+            "When a Python base_level is null, return null for base_level, adjustment, and confidence_level and explain the missing evidence.",
+            "Return JSON only.",
+        ],
+        "ordinal_levels": list(scoring["ordinal_values"]),
+        "confidence_levels": list(scoring["confidence_levels"]),
+        "required_output_format": {
+            "revealed_behavioral_dimensions": {
+                dimension: _dimension_output_template(
+                    quantitative_baselines[dimension]["base_level"]
+                )
+                for dimension in dimensions
+            }
+        },
+    }
+
+
+def _extract_dimension_result(
+    revealed_result: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    quantitative_baselines: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    dimensions = revealed_result.get("revealed_behavioral_dimensions")
+    if not isinstance(dimensions, dict):
+        raise LlmInputBuildError(
+            "Revealed result must contain revealed_behavioral_dimensions"
+        )
+    scoring = manifest["revealed_profile_scoring"]
+    expected = set(scoring["core_dimensions"]) | set(scoring["modifier_dimensions"])
+    if set(dimensions) != expected:
+        raise LlmInputBuildError(
+            "Revealed dimensions must match manifest exactly: "
+            + ", ".join(sorted(expected))
+        )
+    valid_levels = set(scoring["ordinal_values"])
+    ordered_levels = list(scoring["ordinal_values"])
+    valid_confidence = set(scoring["confidence_levels"])
+    cleaned: dict[str, dict[str, Any]] = {}
+    for name in expected:
+        value = dimensions[name]
+        if not isinstance(value, dict):
+            raise LlmInputBuildError(f"{name} result must be an object")
+        base_level = value.get("base_level")
+        adjustment = value.get("adjustment")
+        confidence = value.get("confidence_level")
+        reason = value.get("reason")
+        evidence = value.get("evidence_fields")
+        expected_base = quantitative_baselines[name]["base_level"]
+        if base_level != expected_base:
+            raise LlmInputBuildError(
+                f"{name} base_level must match Python baseline: {expected_base}"
+            )
+        if base_level is not None and base_level not in valid_levels:
+            raise LlmInputBuildError(f"Invalid {name} base_level: {base_level}")
+        if base_level is None and adjustment is not None:
+            raise LlmInputBuildError(
+                f"{name} adjustment must be null when base_level is null"
+            )
+        if base_level is None and confidence is not None:
+            raise LlmInputBuildError(
+                f"{name} confidence_level must be null when base_level is null"
+            )
+        if base_level is not None and confidence not in valid_confidence:
+            raise LlmInputBuildError(
+                f"Invalid {name} confidence_level: {confidence}"
+            )
+        final_level: str | None = None
+        if base_level is not None:
+            maximum = int(quantitative_baselines[name]["max_llm_adjustment_steps"])
+            if type(adjustment) is not int or abs(adjustment) > maximum:
+                raise LlmInputBuildError(
+                    f"{name} adjustment must be an integer between "
+                    f"{-maximum} and {maximum}"
+                )
+            final_index = ordered_levels.index(base_level) + adjustment
+            if final_index < 0 or final_index >= len(ordered_levels):
+                raise LlmInputBuildError(
+                    f"{name} adjustment moves outside the ordinal scale"
+                )
+            final_level = ordered_levels[final_index]
+        if not isinstance(reason, str) or not reason.strip():
+            raise LlmInputBuildError(f"{name} reason is required")
+        if (
+            not isinstance(evidence, list)
+            or not evidence
+            or not all(
+                isinstance(field, str) and bool(field.strip())
+                for field in evidence
+            )
+        ):
+            raise LlmInputBuildError(
+                f"{name} evidence_fields must contain at least one non-empty path"
+            )
+        cleaned[name] = {
+            "base_level": base_level,
+            "adjustment": adjustment,
+            "final_level": final_level,
+            "confidence_level": confidence,
+            "reason": reason.strip(),
+            "evidence_fields": evidence,
+        }
+    return cleaned
+
+
+def calculate_revealed_profile(
+    revealed_result: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    quantitative_baselines: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Deterministically convert the three core ordinal dimensions to a profile."""
+    dimensions = _extract_dimension_result(
+        revealed_result, manifest, quantitative_baselines
+    )
+    scoring = manifest["revealed_profile_scoring"]
+    ordinal_values = scoring["ordinal_values"]
+    core_dimensions = list(scoring["core_dimensions"])
+    component_values = {
+        name: (
+            None
+            if dimensions[name]["final_level"] is None
+            else float(ordinal_values[dimensions[name]["final_level"]])
+        )
+        for name in core_dimensions
+    }
+    missing_core = [
+        name for name, value in component_values.items() if value is None
+    ]
+    if missing_core:
+        return (
+            {
+                "classification_status": "insufficient_evidence",
+                "risk_score": None,
+                "profile": None,
+                "scoring_method": scoring["score_calculation"],
+                "core_dimension_values": component_values,
+                "core_dimension_levels": {
+                    name: dimensions[name]["final_level"]
+                    for name in core_dimensions
+                },
+                "missing_core_dimensions": missing_core,
+            },
+            dimensions,
+        )
+
+    risk_score = round(
+        mean(float(value) for value in component_values.values()), 2
+    )
+
+    profile = None
+    for band in scoring["profile_bands"]:
+        lower = band["lower_exclusive"]
+        upper = band["upper_inclusive"]
+        if (lower is None or risk_score > float(lower)) and risk_score <= float(upper):
+            profile = band["profile"]
+            break
+    if profile is None:
+        raise LlmInputBuildError(
+            f"Revealed risk score is outside manifest profile bands: {risk_score}"
+        )
+
+    return (
+        {
+            "classification_status": "classified",
+            "risk_score": risk_score,
+            "profile": profile,
+            "scoring_method": scoring["score_calculation"],
+            "core_dimension_values": component_values,
+            "core_dimension_levels": {
+                name: dimensions[name]["final_level"]
+                for name in core_dimensions
+            },
+        },
+        dimensions,
+    )
+
+
+def _comparison_request(
+    manifest: Mapping[str, Any], revealed_profile: Mapping[str, Any]
+) -> dict[str, Any]:
+    scoring = manifest["revealed_profile_scoring"]
+    investor_type = revealed_profile["profile"] or "분석 근거 부족"
+    return {
+        "task": (
+            "Explain the difference between the fixed stated and revealed results "
+            "and describe behavioral modifiers."
+        ),
+        "immutable_fields": [
+            "revealed_profile.classification_status",
+            "revealed_profile.risk_score",
+            "revealed_profile.profile",
+            "stated_preference.survey_baseline.score",
+            "stated_preference.survey_baseline.profile",
+            "behavioral_modifiers.cross_context_consistency",
+        ],
+        "rules": [
+            "Do not recalculate, relabel, or override the fixed revealed profile.",
+            "If classification_status is insufficient_evidence, do not invent a risk score or profile.",
+            "Echo the fixed revealed profile exactly in investor_type; do not create a third profile label.",
+            "Information sensitivity describes responsiveness to information and must not change the risk profile.",
+            "Cross-context consistency affects confidence/representativeness, not risk direction.",
+            "Do not interpret the numeric difference between stated survey score and revealed risk score as a calibrated cardinal distance; compare profiles/categories and behavioral evidence instead.",
+            "Explain stated-revealed agreement or gaps using the supplied fixed evidence.",
+            "Return JSON only.",
+        ],
+        "ordinal_levels": list(scoring["ordinal_values"]),
+        "confidence_levels": list(scoring["confidence_levels"]),
+        "required_output_format": {
+            "investor_type": investor_type,
+            "confidence": 0.0,
+            "stated_preference_summary": None,
+            "revealed_preference_summary": None,
+            "stated_revealed_gap": None,
+            "key_behavioral_evidence": [],
+            "final_analysis": None,
+        },
+    }
+
+
+def _schema_references(
+    manifest: Mapping[str, Any], stage: str
+) -> dict[str, Any]:
+    return {
+        "llm_input_schema_version": manifest["input_schema_versions"][stage],
+        "feature_manifest_schema_version": manifest["schema_version"],
+        "feature_schema_version": manifest["feature_schema_version"],
+        "feature_selection_schema_version": manifest[
+            "feature_selection_schema_version"
+        ],
+        "analysis_stage": stage,
+    }
+
+
+def build_behavioral_input(
+    database_path: Path,
+    user_id: str,
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build Call 1 input without ever placing stated values in its context."""
     if not user_id or len(user_id) > 128:
         raise LlmInputBuildError("A valid user_id is required")
     with _connect_read_only(database_path) as connection:
         sessions = _completed_sessions(connection, user_id)
-        stated = _stated_preference(connection, user_id)
-        behavioral: dict[str, Any] = {}
-        for episode in EPISODES:
-            session = sessions[episode]
-            episode_payload: dict[str, Any] = {}
-            if episode in {"E3", "E4"}:
-                episode_payload["adaptive_context"] = _adaptive_context(
-                    episode, session
-                )
-            episode_payload["summary_features"] = _summary_features(
-                connection, episode, str(session["session_id"])
-            )
-            if episode == "E5":
-                episode_payload["information_events"] = _information_events(
-                    connection, str(session["session_id"])
-                )
-            else:
-                episode_payload["decisions"] = _decision_logs(
-                    connection, episode, str(session["session_id"])
-                )
-            behavioral[f"episode{episode[1:]}"] = episode_payload
-
+        behavioral = _behavioral_analysis(connection, sessions, manifest)
+    quantitative_baselines = calculate_quantitative_baselines(
+        behavioral, manifest
+    )
     return {
-        "stated_preference": stated,
+        **_schema_references(manifest, "behavioral"),
         "behavioral_analysis": behavioral,
-        "analysis_request": _analysis_request(),
+        "quantitative_baselines": quantitative_baselines,
+        "analysis_request": _behavioral_request(
+            manifest, quantitative_baselines
+        ),
     }
 
 
-def write_llm_input(output_path: Path, payload: dict[str, Any]) -> None:
+def build_comparison_input(
+    database_path: Path,
+    user_id: str,
+    revealed_result: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build Call 2 from stated preference and a fixed Call 1 result."""
+    if not user_id or len(user_id) > 128:
+        raise LlmInputBuildError("A valid user_id is required")
+    with _connect_read_only(database_path) as connection:
+        sessions = _completed_sessions(connection, user_id)
+        stated = _stated_preference(connection, user_id, manifest)
+        behavioral = _behavioral_analysis(connection, sessions, manifest)
+    quantitative_baselines = calculate_quantitative_baselines(
+        behavioral, manifest
+    )
+    revealed_profile, dimensions = calculate_revealed_profile(
+        revealed_result, manifest, quantitative_baselines
+    )
+    cross_context = behavioral["episode6"]["summary_features"][
+        "cross_context_consistency"
+    ]
+    modifier_names = manifest["revealed_profile_scoring"]["modifier_dimensions"]
+    modifiers = {name: dimensions[name] for name in modifier_names}
+    modifiers["cross_context_consistency"] = cross_context
+    return {
+        **_schema_references(manifest, "comparison"),
+        "stated_preference": stated,
+        "revealed_profile": revealed_profile,
+        "quantitative_baselines": quantitative_baselines,
+        "behavioral_evidence": {
+            name: dimensions[name]
+            for name in manifest["revealed_profile_scoring"]["core_dimensions"]
+        },
+        "behavioral_modifiers": modifiers,
+        "analysis_request": _comparison_request(manifest, revealed_profile),
+    }
+
+
+def build_llm_input(
+    database_path: Path,
+    user_id: str,
+    *,
+    stage: str = "behavioral",
+    revealed_result: Mapping[str, Any] | None = None,
+    manifest: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compatibility entry point for either isolated LLM stage."""
+    active_manifest = (
+        load_feature_manifest() if manifest is None else dict(manifest)
+    )
+    if stage == "behavioral":
+        if revealed_result is not None:
+            raise LlmInputBuildError(
+                "revealed_result is not accepted during behavioral stage"
+            )
+        return build_behavioral_input(database_path, user_id, active_manifest)
+    if stage == "comparison":
+        if revealed_result is None:
+            raise LlmInputBuildError(
+                "comparison stage requires a revealed_result"
+            )
+        return build_comparison_input(
+            database_path, user_id, revealed_result, active_manifest
+        )
+    raise LlmInputBuildError(f"Unsupported analysis stage: {stage}")
+
+
+def write_json(output_path: Path, payload: Mapping[str, Any]) -> None:
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
@@ -409,18 +1106,49 @@ def write_llm_input(output_path: Path, payload: dict[str, Any]) -> None:
     temporary.replace(output_path)
 
 
+# Backward-compatible name used by targeted tooling.
+write_llm_input = write_json
+
+
+def _read_revealed_result(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise LlmInputBuildError(f"Revealed result does not exist: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise LlmInputBuildError(f"Invalid revealed result JSON: {path}") from exc
+    if not isinstance(value, dict):
+        raise LlmInputBuildError("Revealed result must be a JSON object")
+    return value
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build one completed user's structured LLM analysis input"
+        description="Build one completed user's isolated LLM analysis input"
     )
     parser.add_argument("--user-id", required=True, help="Exact experiment user_id")
     parser.add_argument(
+        "--stage",
+        choices=("behavioral", "comparison"),
+        default="behavioral",
+        help="behavioral=Call 1, comparison=Call 2",
+    )
+    parser.add_argument(
+        "--revealed-result",
+        type=Path,
+        help="Call 1 JSON result; required only for comparison stage",
+    )
+    parser.add_argument(
         "--database",
         type=Path,
-        default=Path(
-            os.getenv("EXPERIMENT_DB_PATH", str(DEFAULT_DATABASE_PATH))
-        ),
+        default=Path(os.getenv("EXPERIMENT_DB_PATH", str(DEFAULT_DATABASE_PATH))),
         help="SQLite experiment database path",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=DEFAULT_MANIFEST_PATH,
+        help="Canonical feature schema manifest",
     )
     parser.add_argument(
         "--output",
@@ -428,20 +1156,40 @@ def _parse_args() -> argparse.Namespace:
         default=DEFAULT_OUTPUT_PATH,
         help="Output path (default: backend/data/user_analysis_input.json)",
     )
+    parser.add_argument(
+        "--feature-guide-output",
+        type=Path,
+        default=DEFAULT_FEATURE_GUIDE_PATH,
+        help="Reusable feature guide path",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
     try:
-        payload = build_llm_input(args.database, args.user_id)
-        write_llm_input(args.output, payload)
+        manifest = load_feature_manifest(args.manifest)
+        revealed_result = (
+            None
+            if args.revealed_result is None
+            else _read_revealed_result(args.revealed_result)
+        )
+        payload = build_llm_input(
+            args.database,
+            args.user_id,
+            stage=args.stage,
+            revealed_result=revealed_result,
+            manifest=manifest,
+        )
+        write_json(args.output, payload)
+        write_json(args.feature_guide_output, build_feature_guide(manifest))
     except (LlmInputBuildError, sqlite3.DatabaseError, OSError) as exc:
         print(f"ERROR: {exc}")
         return 1
     print(f"Created: {args.output.resolve()}")
+    print(f"Feature guide: {args.feature_guide_output.resolve()}")
+    print(f"Analysis stage: {args.stage}")
     print("Exported users: 1")
-    print("Completed episodes: E1, E2, E3, E4, E5, E6")
     return 0
 
 

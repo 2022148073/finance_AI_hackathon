@@ -32,6 +32,28 @@ npm run dev
 자동 이관하지 않습니다. DB 경로를 바꾸려면 `EXPERIMENT_DB_PATH` 환경변수를
 사용합니다.
 
+### Kimi-K3 분석 설정
+
+`backend/.env.example`을 `backend/.env`로 복사한 뒤 NVIDIA API Catalog에서
+발급한 서버 전용 API key를 설정합니다.
+
+```dotenv
+NVIDIA_API_KEY=your_nvidia_api_key_here
+NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+KIMI_MODEL=moonshotai/kimi-k3
+KIMI_REASONING_EFFORT=low
+KIMI_TEMPERATURE=1.0
+KIMI_MAX_TOKENS=16384
+KIMI_TIMEOUT_SECONDS=120
+KIMI_MAX_RETRIES=1
+```
+
+`.env`는 Git에서 제외되며 프론트엔드 번들에 포함되지 않습니다. 환경변수를
+바꾼 뒤에는 backend 서버를 다시 시작합니다. 설문과 Episode 1~6를 모두 완료한
+사용자에게만 `POST /api/analysis/runs`가 분석 작업을 생성하고,
+`GET /api/analysis/runs/{analysis_id}`는 처리 상태와 사용자 공개용 결과만
+반환합니다.
+
 ## API 흐름
 
 - `POST /api/episode1/sessions`

@@ -1,0 +1,1117 @@
+{
+  "schema_version": "llm_feature_schema_manifest_v3",
+  "feature_schema_version": "llm_features_v1",
+  "feature_selection_schema_version": "llm_feature_selection_v1",
+  "input_schema_versions": {
+    "behavioral": "llm_behavioral_input_v2",
+    "comparison": "llm_comparison_input_v4"
+  },
+  "policy": {
+    "allowlist_only": true,
+    "do_not_auto_export_new_feature_columns": true,
+    "composite_and_components_are_one_evidence_chain": true,
+    "feature_meaning_changes_require_human_review_and_manifest_version_update": true,
+    "python_computes_quantitative_anchor_and_base_level": true,
+    "llm_may_only_apply_manifest_bounded_adjustment": true
+  },
+  "revealed_profile_scoring": {
+    "core_dimensions": [
+      "risk_engagement",
+      "loss_resilience",
+      "volatility_tolerance"
+    ],
+    "modifier_dimensions": [
+      "information_sensitivity"
+    ],
+    "ordinal_values": {
+      "very_low": 10,
+      "low": 30,
+      "medium": 50,
+      "high": 70,
+      "very_high": 90
+    },
+    "confidence_levels": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "score_calculation": "arithmetic mean of Python-finalized ordinal values for the three core dimensions",
+    "profile_bands": [
+      {
+        "lower_exclusive": null,
+        "upper_inclusive": 20,
+        "profile": "안정형"
+      },
+      {
+        "lower_exclusive": 20,
+        "upper_inclusive": 40,
+        "profile": "안정추구형"
+      },
+      {
+        "lower_exclusive": 40,
+        "upper_inclusive": 60,
+        "profile": "위험중립형"
+      },
+      {
+        "lower_exclusive": 60,
+        "upper_inclusive": 80,
+        "profile": "적극투자형"
+      },
+      {
+        "lower_exclusive": 80,
+        "upper_inclusive": 100,
+        "profile": "공격투자형"
+      }
+    ],
+    "cross_context_consistency_role": "confidence modifier only; never changes the deterministic profile",
+    "information_sensitivity_role": "descriptive modifier only; never changes the deterministic profile"
+  },
+  "episodes": {
+    "E1": {
+      "feature_version": "e1_v2",
+      "features": {
+        "market_participation_rate": {
+          "include_in_llm": true,
+          "meaning": "60일 구간에서 위험자산 비중이 0보다 컸던 기간의 비율",
+          "direction": "higher = more persistent market participation"
+        },
+        "time_to_first_entry": {
+          "include_in_llm": true,
+          "meaning": "Day 1부터 최초 위험자산 진입까지 걸린 거래일 수이며 끝까지 미진입이면 null",
+          "direction": "lower non-null = earlier entry"
+        },
+        "adjustment_frequency": {
+          "include_in_llm": true,
+          "meaning": "이전 decision point 대비 위험자산 비중을 실제로 변경한 횟수",
+          "direction": "higher = more frequent allocation changes"
+        },
+        "mean_abs_allocation_change": {
+          "include_in_llm": true,
+          "meaning": "비중 유지 결정을 제외한 실제 위험자산 비중 변경폭 절댓값의 평균",
+          "direction": "higher = larger typical adjustment"
+        },
+        "decision_time_median": {
+          "include_in_llm": true,
+          "meaning": "해당 에피소드 의사결정 시간의 중앙값(밀리초)",
+          "direction": "higher = longer deliberation"
+        },
+        "mild_gain_response": {
+          "include_in_llm": true,
+          "meaning": "소폭 상승 상태로 태그된 decision point에서의 평균 위험자산 비중 변화",
+          "direction": "positive = increased risk after mild gain"
+        },
+        "mild_drawdown_response": {
+          "include_in_llm": true,
+          "meaning": "소폭 하락 상태로 태그된 decision point에서의 평균 위험자산 비중 변화",
+          "direction": "negative = reduced risk after mild drawdown"
+        },
+        "recovery_response": {
+          "include_in_llm": true,
+          "meaning": "회복 상태로 태그된 decision point에서의 평균 위험자산 비중 변화",
+          "direction": "positive = increased risk during recovery"
+        },
+        "risk_exposure_auc": {
+          "include_in_llm": true,
+          "meaning": "E1 전체 59개 거래일 구간에서 계산한 기간가중 위험자산 노출",
+          "direction": "higher = greater baseline risk engagement",
+          "calculation": "sum(risk_share_i * duration_i) / 59"
+        }
+      }
+    },
+    "E2": {
+      "feature_version": "e2_v3",
+      "features": {
+        "recent_return_sensitivity": {
+          "include_in_llm": true,
+          "meaning": "E2 DP3~DP5에서 직전 decision point 이후 수익률에 대한 위험자산 비중 변화의 OLS 기울기",
+          "direction": "positive = greater risk addition after positive recent returns"
+        },
+        "gain_period_risk_escalation": {
+          "include_in_llm": true,
+          "meaning": "본격 상승 전 DP2와 강한 상승이 누적된 DP5 사이의 위험자산 비중 차이",
+          "direction": "positive = escalated risk during the gain period",
+          "calculation": "risk_share_DP5 - risk_share_DP2"
+        },
+        "strong_gain_response": {
+          "include_in_llm": true,
+          "meaning": "강한 수익이 누적된 DP5에서의 위험자산 비중 변화",
+          "direction": "positive = added risk after strong gains"
+        },
+        "pullback_response_after_gain": {
+          "include_in_llm": true,
+          "meaning": "상승 후 조정이 발생한 DP6에서의 위험자산 비중 변화",
+          "direction": "negative = de-risked on the pullback"
+        },
+        "renewed_rise_response": {
+          "include_in_llm": true,
+          "meaning": "조정 이후 재상승한 DP7에서의 위험자산 비중 변화",
+          "direction": "positive = re-entered or added risk on renewed rise"
+        },
+        "uptrend_risk_increase_count": {
+          "include_in_llm": true,
+          "meaning": "E2 DP3~DP5에서 위험자산 비중을 늘린 횟수",
+          "direction": "higher = more repeated risk increases"
+        },
+        "gain_period_hold_rate": {
+          "include_in_llm": true,
+          "meaning": "E2 DP3~DP5에서 기존 위험자산 비중을 유지한 비율",
+          "direction": "higher = more holding"
+        },
+        "gain_adjustment_intensity": {
+          "include_in_llm": true,
+          "meaning": "E2 DP3~DP5에서 유지 결정을 제외한 실제 비중 변경폭 절댓값의 평균",
+          "direction": "higher = larger gain-period adjustments"
+        },
+        "decision_time_median": {
+          "include_in_llm": true,
+          "meaning": "해당 에피소드 의사결정 시간의 중앙값(밀리초)",
+          "direction": "higher = longer deliberation"
+        },
+        "strong_gain_decision_time": {
+          "include_in_llm": true,
+          "meaning": "강한 수익 상태인 DP5의 판단시간(밀리초)",
+          "direction": "higher = longer deliberation at strong gain"
+        },
+        "correction_decision_time": {
+          "include_in_llm": true,
+          "meaning": "상승 후 조정 상태인 DP6의 판단시간(밀리초)",
+          "direction": "higher = longer deliberation during correction"
+        },
+        "uptrend_risk_exposure": {
+          "include_in_llm": true,
+          "meaning": "E2 DP2~DP5 상승구간의 기간가중 위험자산 노출",
+          "direction": "higher = greater risk exposure during uptrend"
+        }
+      }
+    },
+    "E3": {
+      "feature_version": "e3_v3",
+      "features": {
+        "loss_period_risk_change": {
+          "include_in_llm": true,
+          "meaning": "E3 손실 전 DP1 대비 최대 스트레스 DP5의 위험자산 비중 변화",
+          "direction": "negative = de-risking during loss",
+          "calculation": "risk_share_DP5 - risk_share_DP1"
+        },
+        "drawdown_sensitivity": {
+          "include_in_llm": true,
+          "meaning": "E3 DP1~DP5의 drawdown 심화 단위당 위험자산 비중 감소 민감도",
+          "direction": "higher positive = stronger de-risking per unit drawdown"
+        },
+        "first_meaningful_reduction_drawdown": {
+          "include_in_llm": true,
+          "meaning": "처음 10%p 이상 위험자산 비중을 줄였을 때의 양수 drawdown severity이며 없으면 null",
+          "direction": "higher = tolerated deeper drawdown before meaningful reduction"
+        },
+        "loss_period_risk_exposure": {
+          "include_in_llm": true,
+          "meaning": "E3 DP1~DP5 손실구간의 기간가중 위험자산 노출",
+          "direction": "higher = maintained more risk during loss"
+        },
+        "max_loss_period_reduction": {
+          "include_in_llm": true,
+          "meaning": "E3 DP2~DP5 최소 위험자산 비중과 DP1 위험자산 비중의 차이",
+          "direction": "more negative = larger maximum reduction"
+        },
+        "recovery_reentry": {
+          "include_in_llm": true,
+          "meaning": "E3 최대 스트레스 DP5 이후 최종 DP7까지의 위험자산 비중 변화",
+          "direction": "positive = increased risk during recovery",
+          "calculation": "risk_share_DP7 - risk_share_DP5"
+        },
+        "drawdown_period_risk_increase_count": {
+          "include_in_llm": true,
+          "meaning": "E3 DP2~DP5에서 손실이 진행되는 동안 위험자산 비중을 늘린 횟수",
+          "direction": "higher = more counter-cyclical or risk-seeking increases"
+        },
+        "drawdown_reduction_consistency": {
+          "include_in_llm": true,
+          "meaning": "E3 DP2~DP5 중 위험자산 비중을 줄인 횟수를 4로 나눈 비율",
+          "direction": "higher = more consistently reduced risk during drawdown"
+        },
+        "reference_point_crossing_response": {
+          "include_in_llm": true,
+          "meaning": "정규화 가격이 기준값 100을 처음 하향 통과한 직후 decision point의 위험자산 비중 변화",
+          "direction": "negative = de-risking after reference-point crossing"
+        },
+        "trough_response": {
+          "include_in_llm": true,
+          "meaning": "E3 최대 스트레스 지점인 DP5의 위험자산 비중 변화",
+          "direction": "negative = de-risking at trough"
+        },
+        "early_recovery_response": {
+          "include_in_llm": true,
+          "meaning": "E3 초기 회복 지점인 DP6의 위험자산 비중 변화",
+          "direction": "positive = early recovery re-entry"
+        },
+        "late_recovery_response": {
+          "include_in_llm": true,
+          "meaning": "E3 후반 회복 지점인 DP7의 위험자산 비중 변화",
+          "direction": "positive = late recovery re-entry"
+        },
+        "post_loss_risk_persistence": {
+          "include_in_llm": true,
+          "meaning": "E3 최종 DP7과 손실 전 DP1의 위험자산 비중 차이",
+          "direction": "negative = risk remained below the pre-loss level"
+        },
+        "recovery_reentry_ratio": {
+          "include_in_llm": true,
+          "meaning": "손실 중 줄인 위험자산 비중 가운데 DP7까지 다시 늘린 비율이며 손실 중 줄이지 않았다면 null",
+          "direction": "higher = greater proportional re-entry"
+        },
+        "retention_score": {
+          "include_in_llm": true,
+          "meaning": "E3 손실구간 위험노출을 DP1 기준 위험자산 비중으로 정규화한 유지 점수",
+          "direction": "higher = retained more of baseline risk; maximum 1"
+        },
+        "reduction_score": {
+          "include_in_llm": true,
+          "meaning": "E3에서 사용 가능한 감축 범위 중 위험자산 비중을 덜 줄일수록 높아지는 점수",
+          "direction": "higher = less de-risking, not more reduction"
+        },
+        "threshold_score": {
+          "include_in_llm": true,
+          "meaning": "E3 시나리오 최대 drawdown 대비 의미 있는 감축이 처음 발생한 drawdown 비율이며 DP5까지 감축이 없으면 1",
+          "direction": "higher = endured a larger share of scenario drawdown before reducing"
+        },
+        "recovery_score": {
+          "include_in_llm": true,
+          "meaning": "E3 손실 중 줄인 비중의 회복기 재진입 점수이며 손실 중 줄이지 않았다면 1",
+          "direction": "higher = greater recovery behavior score"
+        },
+        "severity_factor": {
+          "include_in_llm": true,
+          "meaning": "E3에 배정된 시나리오의 최대 drawdown 강도를 0~1로 정규화한 보정값",
+          "direction": "higher = more severe assigned loss scenario",
+          "calculation": "clip(abs(scenario_max_drawdown) / 0.30, 0, 1)"
+        },
+        "behavior_resilience_score": {
+          "include_in_llm": true,
+          "meaning": "E3 손실구간 위험 유지, 감축 임계점, 회복 행동을 결합한 severity 미적용 종합점수",
+          "direction": "higher = greater behavioral loss resilience",
+          "calculation": "0.40*retention + 0.30*reduction + 0.20*threshold + 0.10*recovery",
+          "derived_from": [
+            "retention_score",
+            "reduction_score",
+            "threshold_score",
+            "recovery_score"
+          ]
+        }
+      },
+      "adaptive_context": {
+        "assigned_level": {
+          "meaning": "E1/E2 행동 결과에 따라 E3에 배정된 손실 난이도 L1~L5"
+        },
+        "routing_score": {
+          "meaning": "E3 손실 난이도 배정에 사용한 E1/E2 기반 위험노출 점수"
+        },
+        "scenario_max_drawdown": {
+          "meaning": "배정된 E3 시나리오의 60거래일 최대 drawdown이며 음수 소수로 표현"
+        },
+        "entry_risk_share": {
+          "meaning": "E3 시작 전에 확정된 위험자산 비중"
+        },
+        "allocation_floor": {
+          "meaning": "배정된 E3 조건에서 허용되는 최소 위험자산 비중"
+        }
+      }
+    },
+    "E4": {
+      "feature_version": "e4_v1",
+      "features": {
+        "volatility_sensitivity": {
+          "include_in_llm": true,
+          "meaning": "E4 DP2 이후 20일 변동성 변화에 대한 위험자산 비중 변화의 OLS 기울기",
+          "direction": "negative = de-risking as volatility rises"
+        },
+        "high_vol_risk_exposure": {
+          "include_in_llm": true,
+          "meaning": "E4 시나리오 내부 20일 변동성 상위 25% 기간의 기간가중 위험자산 노출",
+          "direction": "higher = maintained more risk in high volatility"
+        },
+        "low_vol_risk_exposure": {
+          "include_in_llm": true,
+          "meaning": "E4 시나리오 내부 20일 변동성 하위 25% 기간의 기간가중 위험자산 노출",
+          "direction": "higher = maintained more risk in low volatility"
+        },
+        "volatility_increase_response_mean": {
+          "include_in_llm": true,
+          "meaning": "변동성 방향이 rising인 decision point들의 평균 위험자산 비중 변화",
+          "direction": "negative = average de-risking as volatility rises"
+        },
+        "volatility_decrease_response_mean": {
+          "include_in_llm": true,
+          "meaning": "변동성 방향이 falling인 decision point들의 평균 위험자산 비중 변화",
+          "direction": "positive = average re-entry as volatility falls"
+        },
+        "peak_volatility_response": {
+          "include_in_llm": true,
+          "meaning": "E4 DP2~DP7 중 20일 변동성이 가장 높은 decision point의 위험자산 비중 변화",
+          "direction": "negative = de-risking at peak volatility"
+        },
+        "volatility_derisking_consistency": {
+          "include_in_llm": true,
+          "meaning": "변동성이 상승한 decision point 중 위험자산 비중을 줄인 비율",
+          "direction": "higher = more consistent volatility-driven de-risking"
+        },
+        "volatility_risk_increase_count": {
+          "include_in_llm": true,
+          "meaning": "변동성이 상승한 decision point 중 위험자산 비중을 늘린 횟수",
+          "direction": "higher = more risk increases while volatility rose"
+        },
+        "volatility_adjustment_intensity": {
+          "include_in_llm": true,
+          "meaning": "변동성 상승 또는 하락 decision point에서 유지 결정을 제외한 비중 변경폭 절댓값 평균",
+          "direction": "higher = larger volatility-related adjustments"
+        },
+        "high_vol_hold_rate": {
+          "include_in_llm": true,
+          "meaning": "20일 변동성 상위 25%에 해당하는 decision point에서 기존 비중을 유지한 비율",
+          "direction": "higher = more holding at high volatility"
+        },
+        "volatility_compression_reentry": {
+          "include_in_llm": true,
+          "meaning": "20일 변동성이 가장 크게 하락한 decision point의 위험자산 비중 변화",
+          "direction": "positive = re-entry on volatility compression"
+        },
+        "final_vs_entry_risk_change": {
+          "include_in_llm": true,
+          "meaning": "E4 최종 DP7과 에피소드 진입 위험자산 비중의 차이",
+          "direction": "positive = ended with more risk"
+        },
+        "decision_time_volatility_median": {
+          "include_in_llm": true,
+          "meaning": "E4 DP2~DP7 판단시간의 중앙값(밀리초)",
+          "direction": "higher = longer deliberation"
+        },
+        "peak_volatility_decision_time": {
+          "include_in_llm": true,
+          "meaning": "20일 변동성이 가장 높은 decision point의 판단시간(밀리초)",
+          "direction": "higher = longer peak-volatility deliberation"
+        },
+        "volatility_shift_decision_time": {
+          "include_in_llm": true,
+          "meaning": "절대 변동성 변화가 가장 큰 decision point의 판단시간(밀리초)",
+          "direction": "higher = longer shift deliberation"
+        }
+      },
+      "adaptive_context": {
+        "assigned_volatility_level": {
+          "meaning": "E3까지의 행동 결과에 따라 E4에 배정된 변동성 난이도 V1~V5"
+        },
+        "e4_routing_score": {
+          "meaning": "E4 변동성 난이도 배정에 사용한 행동 기반 종합 routing 점수"
+        },
+        "e4_routing_fallback": {
+          "meaning": "E3 측정값 부족으로 E1/E2 기반 fallback routing을 사용했는지 여부"
+        },
+        "e4_context_gap": {
+          "meaning": "E1/E2 기반 E3 routing score와 E3 loss resilience score의 절대 차이"
+        },
+        "e4_upper_level_capped": {
+          "meaning": "E3에서 floor 도달 또는 full exit 때문에 최종 E4 레벨에 V2 상한이 적용됐는지 여부"
+        },
+        "scenario_volatility_60d": {
+          "meaning": "배정된 E4 시나리오 전체 60거래일의 연율화 변동성"
+        },
+        "scenario_volatility_20d_min": {
+          "meaning": "배정된 E4 시나리오 내부 20일 연율화 변동성의 최솟값"
+        },
+        "scenario_volatility_20d_max": {
+          "meaning": "배정된 E4 시나리오 내부 20일 연율화 변동성의 최댓값"
+        },
+        "scenario_volatility_20d_q25": {
+          "meaning": "배정된 E4 시나리오 내부 20일 연율화 변동성의 25백분위수"
+        },
+        "scenario_volatility_20d_q75": {
+          "meaning": "배정된 E4 시나리오 내부 20일 연율화 변동성의 75백분위수"
+        },
+        "entry_risk_share": {
+          "meaning": "E4 시작 시점에 이어받은 위험자산 비중"
+        }
+      }
+    },
+    "E5": {
+      "feature_version": "e5_v2",
+      "features": {
+        "news_alignment_score": {
+          "include_in_llm": true,
+          "meaning": "정보 제시 후 위험자산 비중 변화 방향이 뉴스 자극의 방향과 일치한 decision point 횟수",
+          "direction": "higher = more frequent news alignment"
+        },
+        "expert_alignment_score": {
+          "include_in_llm": true,
+          "meaning": "정보 제시 후 위험자산 비중 변화 방향이 전문가 의견의 방향과 일치한 decision point 횟수",
+          "direction": "higher = more frequent expert alignment"
+        },
+        "community_alignment_score": {
+          "include_in_llm": true,
+          "meaning": "정보 제시 후 위험자산 비중 변화 방향이 커뮤니티 자극의 방향과 일치한 decision point 횟수",
+          "direction": "higher = more frequent community alignment"
+        },
+        "news_alignment_magnitude": {
+          "include_in_llm": true,
+          "meaning": "뉴스 방향과 일치한 정보 제시 후 위험자산 비중 변경폭 절댓값의 합",
+          "direction": "higher = larger news-aligned movement"
+        },
+        "expert_alignment_magnitude": {
+          "include_in_llm": true,
+          "meaning": "전문가 의견 방향과 일치한 정보 제시 후 위험자산 비중 변경폭 절댓값의 합",
+          "direction": "higher = larger expert-aligned movement"
+        },
+        "community_alignment_magnitude": {
+          "include_in_llm": true,
+          "meaning": "커뮤니티 방향과 일치한 정보 제시 후 위험자산 비중 변경폭 절댓값의 합",
+          "direction": "higher = larger community-aligned movement"
+        },
+        "dp1_information_delta": {
+          "include_in_llm": true,
+          "meaning": "E5 DP1에서 정보 제시 후 위험자산 비중 변화",
+          "direction": "sign indicates post-information direction"
+        },
+        "dp2_information_delta": {
+          "include_in_llm": true,
+          "meaning": "E5 DP2에서 정보 제시 후 위험자산 비중 변화",
+          "direction": "sign indicates post-information direction"
+        },
+        "dp3_information_delta": {
+          "include_in_llm": true,
+          "meaning": "E5 DP3에서 정보 제시 후 위험자산 비중 변화",
+          "direction": "sign indicates post-information direction"
+        },
+        "positive_alignment_count": {
+          "include_in_llm": true,
+          "meaning": "정보 제시 후 위험자산 비중을 늘린 decision point 수",
+          "direction": "higher = more positive-stimulus alignments"
+        },
+        "negative_alignment_count": {
+          "include_in_llm": true,
+          "meaning": "정보 제시 후 위험자산 비중을 줄인 decision point 수",
+          "direction": "higher = more negative-stimulus alignments"
+        },
+        "information_counter_adjustment_count": {
+          "include_in_llm": true,
+          "meaning": "정보 제시 전 조정과 반대 방향으로 정보 제시 후 다시 조정한 횟수",
+          "direction": "higher = more information-driven reversals"
+        },
+        "conflict_hold_count": {
+          "include_in_llm": true,
+          "meaning": "서로 상반된 정보를 본 뒤 위험자산 비중을 유지한 횟수",
+          "direction": "higher = more conflict holds"
+        },
+        "pre_information_decision_time_median": {
+          "include_in_llm": true,
+          "meaning": "정보 제시 전 비중 선택 판단시간의 중앙값(밀리초)",
+          "direction": "higher = longer pre-information deliberation"
+        },
+        "post_information_decision_time_median": {
+          "include_in_llm": true,
+          "meaning": "정보 제시 후 비중 선택 판단시간의 중앙값(밀리초)",
+          "direction": "higher = longer post-information deliberation"
+        },
+        "information_decision_time_change": {
+          "include_in_llm": true,
+          "meaning": "정보 제시 후 판단시간 중앙값에서 정보 제시 전 판단시간 중앙값을 뺀 차이(밀리초)",
+          "direction": "positive = information increased deliberation time"
+        },
+        "external_information_sensitivity": {
+          "include_in_llm": true,
+          "meaning": "세 decision point에서 정보 제시 후 위험자산 비중 변경폭 절댓값의 평균",
+          "direction": "higher = greater behavioral sensitivity to external information"
+        },
+        "information_adjustment_rate": {
+          "include_in_llm": true,
+          "meaning": "세 상충 정보 decision point 중 정보 제시 후 실제로 비중을 변경한 비율",
+          "direction": "higher = adjusted more often after information"
+        }
+      },
+      "information_event_fields": {
+        "risk_share_before_pre": {
+          "meaning": "해당 DP의 정보 제시 전 시장 판단을 시작하기 직전 위험자산 비중"
+        },
+        "pre_information_allocation": {
+          "meaning": "시장정보 자극을 보기 전에 사용자가 선택한 위험자산 비중"
+        },
+        "pre_information_delta": {
+          "meaning": "pre_information_allocation - risk_share_before_pre"
+        },
+        "post_information_allocation": {
+          "meaning": "상충하는 두 정보 자극을 본 뒤 사용자가 다시 선택한 위험자산 비중"
+        },
+        "information_delta": {
+          "meaning": "post_information_allocation - pre_information_allocation"
+        },
+        "sources": {
+          "meaning": "제시된 두 자극의 출처, 방향, 강도이며 화면에 숨겨진 template 식별자는 제외됨"
+        },
+        "aligned_source": {
+          "meaning": "information_delta 방향과 일치한 자극 출처이며 비중 유지 시 null"
+        },
+        "display_order": {
+          "meaning": "두 정보 출처가 화면 좌우에 제시된 순서"
+        },
+        "market_snapshot": {
+          "meaning": "PRE와 POST가 공유하는 동일하고 불변인 시장 상태"
+        },
+        "pre_information_decision_time_ms": {
+          "meaning": "PRE allocation UI 활성화부터 제출까지의 시간"
+        },
+        "post_information_decision_time_ms": {
+          "meaning": "두 정보 카드 표시부터 POST 제출까지의 시간"
+        }
+      }
+    },
+    "E6": {
+      "feature_version": "e6_v1",
+      "features": {
+        "anchor_drawdown_risk_change": {
+          "include_in_llm": true,
+          "meaning": "E6 공통시장 손실 전 DP2 대비 최대 drawdown DP4의 위험자산 비중 변화",
+          "direction": "negative = de-risking during anchor drawdown"
+        },
+        "anchor_drawdown_sensitivity": {
+          "include_in_llm": true,
+          "meaning": "E6 공통시장 drawdown 심화 단위당 위험자산 비중 감소 민감도",
+          "direction": "higher positive = stronger de-risking per unit drawdown"
+        },
+        "anchor_loss_risk_exposure": {
+          "include_in_llm": true,
+          "meaning": "E6 DP2~DP4 손실구간의 기간가중 위험자산 노출",
+          "direction": "higher = maintained more risk during anchor loss"
+        },
+        "anchor_recovery_reentry": {
+          "include_in_llm": true,
+          "meaning": "E6 최대 drawdown DP4 대비 회복 상태 DP6의 위험자산 비중 변화",
+          "direction": "positive = recovery re-entry"
+        },
+        "anchor_recovery_reentry_ratio": {
+          "include_in_llm": true,
+          "meaning": "E6 손실 중 줄인 위험자산 비중 가운데 DP6까지 다시 늘린 비율이며 줄이지 않았다면 null",
+          "direction": "higher = greater proportional re-entry"
+        },
+        "e6_retention_score": {
+          "include_in_llm": true,
+          "meaning": "E3와 동일한 정의로 계산한 E6 손실구간 위험 유지 점수",
+          "direction": "higher = retained more baseline risk"
+        },
+        "e6_reduction_score": {
+          "include_in_llm": true,
+          "meaning": "E3와 동일한 정의로 계산하며 위험자산 비중을 덜 줄일수록 높아지는 E6 점수",
+          "direction": "higher = less de-risking, not more reduction"
+        },
+        "e6_threshold_score": {
+          "include_in_llm": true,
+          "meaning": "E3와 동일한 정의로 계산한 E6 의미 있는 감축 임계점 점수",
+          "direction": "higher = endured more drawdown before reduction"
+        },
+        "e6_recovery_score": {
+          "include_in_llm": true,
+          "meaning": "E3와 동일한 정의로 계산한 E6 회복 행동 점수",
+          "direction": "higher = greater recovery behavior score"
+        },
+        "risk_engagement_consistency": {
+          "include_in_llm": true,
+          "meaning": "E1과 E2 기반 사전 위험노출 점수와 E6 위험노출의 일치도",
+          "direction": "higher = more consistent risk engagement across contexts",
+          "calculation": "clip(1 - abs(anchor_risk_exposure_auc - e3_routing_score), 0, 1)"
+        },
+        "loss_response_consistency": {
+          "include_in_llm": true,
+          "meaning": "E3 severity 미적용 행동 resilience와 E6 행동 resilience의 일치도",
+          "direction": "higher = more consistent loss response across contexts"
+        },
+        "anchor_adjustment_frequency": {
+          "include_in_llm": true,
+          "meaning": "E6에서 위험자산 비중을 실제로 변경한 횟수",
+          "direction": "higher = more frequent adjustments"
+        },
+        "anchor_adjustment_intensity": {
+          "include_in_llm": true,
+          "meaning": "E6에서 유지 결정을 제외한 실제 위험자산 비중 변경폭 절댓값 평균",
+          "direction": "higher = larger typical adjustment"
+        },
+        "anchor_peak_response": {
+          "include_in_llm": true,
+          "meaning": "E6 손실 전 상승 또는 고점 상태인 DP2의 위험자산 비중 변화",
+          "direction": "sign indicates response direction"
+        },
+        "anchor_trough_response": {
+          "include_in_llm": true,
+          "meaning": "E6 최대 drawdown 상태인 DP4의 위험자산 비중 변화",
+          "direction": "negative = de-risking at trough"
+        },
+        "anchor_early_recovery_response": {
+          "include_in_llm": true,
+          "meaning": "E6 초기 회복 상태인 DP5의 위험자산 비중 변화",
+          "direction": "positive = early recovery re-entry"
+        },
+        "anchor_late_recovery_response": {
+          "include_in_llm": true,
+          "meaning": "E6 회복이 충분히 진행된 DP6의 위험자산 비중 변화",
+          "direction": "positive = later recovery re-entry"
+        },
+        "anchor_final_vs_entry_change": {
+          "include_in_llm": true,
+          "meaning": "E6 최종 DP7과 최초 DP1의 위험자산 비중 차이",
+          "direction": "positive = ended with more risk than entry"
+        },
+        "anchor_decision_time_median": {
+          "include_in_llm": true,
+          "meaning": "E6 전체 판단시간의 중앙값(밀리초)",
+          "direction": "higher = longer deliberation"
+        },
+        "anchor_max_drawdown_decision_time": {
+          "include_in_llm": true,
+          "meaning": "E6 최대 drawdown 상태인 DP4의 판단시간(밀리초)",
+          "direction": "higher = longer trough deliberation"
+        },
+        "anchor_recovery_decision_time": {
+          "include_in_llm": true,
+          "meaning": "E6 DP5~DP6 회복구간 판단시간의 중앙값(밀리초)",
+          "direction": "higher = longer recovery deliberation"
+        },
+        "anchor_risk_exposure_auc": {
+          "include_in_llm": true,
+          "meaning": "E6 전체 59개 거래일 구간에서 계산한 기간가중 위험자산 노출",
+          "direction": "higher = greater anchor-market risk engagement",
+          "calculation": "sum(risk_share_i * duration_i) / 59"
+        },
+        "e6_behavior_resilience_score": {
+          "include_in_llm": true,
+          "meaning": "E3와 동일한 component와 가중치를 사용하되 severity factor를 적용하지 않은 E6 행동 resilience 종합점수",
+          "direction": "higher = greater behavioral loss resilience in the anchor market",
+          "calculation": "0.40*e6_retention + 0.30*e6_reduction + 0.20*e6_threshold + 0.10*e6_recovery",
+          "derived_from": [
+            "e6_retention_score",
+            "e6_reduction_score",
+            "e6_threshold_score",
+            "e6_recovery_score"
+          ]
+        },
+        "cross_context_consistency": {
+          "include_in_llm": true,
+          "meaning": "위험참여 일치도와 손실반응 일치도의 평균으로 backend가 계산한 교차맥락 행동 일치도",
+          "direction": "higher = greater measured cross-context consistency",
+          "calculation": "(risk_engagement_consistency + loss_response_consistency) / 2",
+          "derived_from": [
+            "risk_engagement_consistency",
+            "loss_response_consistency"
+          ]
+        }
+      }
+    }
+  },
+  "behavioral_dimension_rubrics": {
+    "rubric_version": "behavioral_ordinal_rubric_v2",
+    "calibration_status": "MVP heuristic cutoffs; retain version and recalibrate only after sufficient user data are collected",
+    "shared_rules": {
+      "evidence_requirement": "각 판단은 최소 하나 이상의 실제 JSON field path를 evidence_fields에 기록한다",
+      "conflict_handling": "정량 anchor와 raw decision path가 충돌하면 정량 anchor를 출발점으로 사용하되 confidence를 낮추고 충돌 근거를 reason에 기록한다",
+      "null_rule": "필수 정량 anchor와 이를 대체할 raw evidence가 모두 부족하면 level을 null로 반환한다",
+      "boundary_rule": "경계값은 아래 quantitative_anchor의 lower/upper 포함 규칙을 그대로 따른다"
+    },
+    "dimensions": {
+      "risk_engagement": {
+        "rubric_id": "risk_engagement_v1",
+        "primary_evidence": [
+          "behavioral_analysis.episode3.adaptive_context.routing_score"
+        ],
+        "supporting_evidence": [
+          "behavioral_analysis.episode1.summary_features.risk_exposure_auc",
+          "behavioral_analysis.episode2.summary_features.uptrend_risk_exposure",
+          "behavioral_analysis.episode1.summary_features.market_participation_rate",
+          "behavioral_analysis.episode1.summary_features.time_to_first_entry",
+          "behavioral_analysis.episode1.decisions",
+          "behavioral_analysis.episode2.decisions"
+        ],
+        "anchor_calculation": "E3 adaptive_context.routing_score를 그대로 사용하며 이 값은 기존 E1 0.7, E2 0.3 위험노출 결합값",
+        "levels": {
+          "very_low": {
+            "quantitative_anchor": "0.00 <= anchor <= 0.20",
+            "behavioral_pattern": "대부분 현금 상태이며 진입이 매우 늦거나 위험노출이 거의 없음"
+          },
+          "low": {
+            "quantitative_anchor": "0.20 < anchor <= 0.40",
+            "behavioral_pattern": "낮은 위험비중을 주로 유지하고 상승장에서도 참여가 제한적임"
+          },
+          "medium": {
+            "quantitative_anchor": "0.40 < anchor <= 0.60",
+            "behavioral_pattern": "중간 수준 위험비중으로 시장에 참여하며 과도한 확대나 회피가 없음"
+          },
+          "high": {
+            "quantitative_anchor": "0.60 < anchor <= 0.80",
+            "behavioral_pattern": "중립장과 상승장에서 높은 위험노출을 지속적으로 유지함"
+          },
+          "very_high": {
+            "quantitative_anchor": "0.80 < anchor <= 1.00",
+            "behavioral_pattern": "대부분의 기간에 매우 높은 위험비중을 유지함"
+          }
+        },
+        "anchor": {
+          "type": "path_value",
+          "path": "behavioral_analysis.episode3.adaptive_context.routing_score",
+          "null_policy": "insufficient_evidence"
+        },
+        "cutoffs": [
+          {
+            "level": "very_low",
+            "min": 0,
+            "max": 0.2,
+            "min_inclusive": true,
+            "max_inclusive": true
+          },
+          {
+            "level": "low",
+            "min": 0.2,
+            "max": 0.4,
+            "min_inclusive": false,
+            "max_inclusive": true
+          },
+          {
+            "level": "medium",
+            "min": 0.4,
+            "max": 0.6,
+            "min_inclusive": false,
+            "max_inclusive": true
+          },
+          {
+            "level": "high",
+            "min": 0.6,
+            "max": 0.8,
+            "min_inclusive": false,
+            "max_inclusive": true
+          },
+          {
+            "level": "very_high",
+            "min": 0.8,
+            "max": 1,
+            "min_inclusive": false,
+            "max_inclusive": true
+          }
+        ],
+        "max_llm_adjustment_steps": 1,
+        "adjustment_guidance": {
+          "0": "supporting evidence가 base와 대체로 일치하거나 상충하여 방향이 불명확할 때 사용",
+          "-1": "supporting evidence와 raw decision이 base보다 한 단계 낮은 지속적 위험참여를 명확히 보일 때만 사용",
+          "+1": "supporting evidence와 raw decision이 base보다 한 단계 높은 지속적 위험참여를 명확히 보일 때만 사용"
+        }
+      },
+      "loss_resilience": {
+        "rubric_id": "loss_resilience_v1",
+        "primary_evidence": [
+          "behavioral_analysis.episode3.summary_features.behavior_resilience_score"
+        ],
+        "supporting_evidence": [
+          "behavioral_analysis.episode3.adaptive_context",
+          "behavioral_analysis.episode3.decisions",
+          "behavioral_analysis.episode6.summary_features.e6_behavior_resilience_score",
+          "behavioral_analysis.episode6.summary_features.loss_response_consistency",
+          "behavioral_analysis.episode6.decisions"
+        ],
+        "anchor_calculation": "E3 behavior_resilience_score를 그대로 사용하고 E6는 calibration 및 supporting evidence로만 사용",
+        "levels": {
+          "very_low": {
+            "quantitative_anchor": "0.00 <= anchor <= 0.20",
+            "behavioral_pattern": "손실구간에서 위험노출 유지와 회복 행동이 매우 약함"
+          },
+          "low": {
+            "quantitative_anchor": "0.20 < anchor <= 0.40",
+            "behavioral_pattern": "비교적 이른 감축과 낮은 손실구간 노출이 관찰됨"
+          },
+          "medium": {
+            "quantitative_anchor": "0.40 < anchor <= 0.60",
+            "behavioral_pattern": "일부 감축과 일부 유지 또는 재진입이 혼합됨"
+          },
+          "high": {
+            "quantitative_anchor": "0.60 < anchor <= 0.80",
+            "behavioral_pattern": "손실 중 상당한 위험노출을 유지하고 회복기에 재진입하는 경향이 뚜렷함"
+          },
+          "very_high": {
+            "quantitative_anchor": "0.80 < anchor <= 1.00",
+            "behavioral_pattern": "깊은 손실에서도 위험노출을 강하게 유지하며 회복 행동도 일관됨"
+          }
+        },
+        "anchor": {
+          "type": "path_value",
+          "path": "behavioral_analysis.episode3.summary_features.behavior_resilience_score",
+          "null_policy": "insufficient_evidence"
+        },
+        "cutoffs": [
+          {
+            "level": "very_low",
+            "min": 0,
+            "max": 0.2,
+            "min_inclusive": true,
+            "max_inclusive": true
+          },
+          {
+            "level": "low",
+            "min": 0.2,
+            "max": 0.4,
+            "min_inclusive": false,
+            "max_inclusive": true
+          },
+          {
+            "level": "medium",
+            "min": 0.4,
+            "max": 0.6,
+            "min_inclusive": false,
+            "max_inclusive": true
+          },
+          {
+            "level": "high",
+            "min": 0.6,
+            "max": 0.8,
+            "min_inclusive": false,
+            "max_inclusive": true
+          },
+          {
+            "level": "very_high",
+            "min": 0.8,
+            "max": 1,
+            "min_inclusive": false,
+            "max_inclusive": true
+          }
+        ],
+        "max_llm_adjustment_steps": 1,
+        "adjustment_guidance": {
+          "0": "E6 검증값이 E3 base를 지지하거나 E3/E6 증거가 혼합될 때 사용",
+          "-1": "E6 검증값과 raw loss decision이 E3 base보다 한 단계 낮은 resilience를 일관되게 보일 때만 사용",
+          "+1": "E6 검증값과 raw loss decision이 E3 base보다 한 단계 높은 resilience를 일관되게 보일 때만 사용"
+        }
+      },
+      "volatility_tolerance": {
+        "rubric_id": "volatility_tolerance_v1",
+        "primary_evidence": [
+          "behavioral_analysis.episode4.summary_features.high_vol_risk_exposure"
+        ],
+        "supporting_evidence": [
+          "behavioral_analysis.episode4.adaptive_context",
+          "behavioral_analysis.episode4.summary_features.volatility_sensitivity",
+          "behavioral_analysis.episode4.summary_features.volatility_derisking_consistency",
+          "behavioral_analysis.episode4.summary_features.peak_volatility_response",
+          "behavioral_analysis.episode4.decisions"
+        ],
+        "anchor_calculation": "E4 high_vol_risk_exposure를 그대로 사용",
+        "levels": {
+          "very_low": {
+            "quantitative_anchor": "0.00 <= anchor <= 0.20",
+            "behavioral_pattern": "고변동 구간에서 위험노출이 매우 낮고 반복적으로 de-risking함"
+          },
+          "low": {
+            "quantitative_anchor": "0.20 < anchor <= 0.40",
+            "behavioral_pattern": "고변동 구간에서 낮은 비중을 유지하고 변동성 상승 시 주로 감축함"
+          },
+          "medium": {
+            "quantitative_anchor": "0.40 < anchor <= 0.60",
+            "behavioral_pattern": "고변동 구간에서 중간 비중을 유지하며 반응이 혼합적임"
+          },
+          "high": {
+            "quantitative_anchor": "0.60 < anchor <= 0.80",
+            "behavioral_pattern": "고변동 구간에서도 높은 비중을 유지하고 감축이 제한적임"
+          },
+          "very_high": {
+            "quantitative_anchor": "0.80 < anchor <= 1.00",
+            "behavioral_pattern": "고변동 구간에서도 매우 높은 비중을 유지하거나 오히려 확대함"
+          }
+        },
+        "anchor": {
+          "type": "path_value",
+          "path": "behavioral_analysis.episode4.summary_features.high_vol_risk_exposure",
+          "null_policy": "insufficient_evidence"
+        },
+        "cutoffs": [
+          {
+            "level": "very_low",
+            "min": 0,
+            "max": 0.2,
+            "min_inclusive": true,
+            "max_inclusive": true
+          },
+          {
+            "level": "low",
+            "min": 0.2,
+            "max": 0.4,
+            "min_inclusive": false,
+            "max_inclusive": true
+          },
+          {
+            "level": "medium",
+            "min": 0.4,
+            "max": 0.6,
+            "min_inclusive": false,
+            "max_inclusive": true
+          },
+          {
+            "level": "high",
+            "min": 0.6,
+            "max": 0.8,
+            "min_inclusive": false,
+            "max_inclusive": true
+          },
+          {
+            "level": "very_high",
+            "min": 0.8,
+            "max": 1,
+            "min_inclusive": false,
+            "max_inclusive": true
+          }
+        ],
+        "max_llm_adjustment_steps": 1,
+        "adjustment_guidance": {
+          "0": "supporting volatility evidence가 base와 일치하거나 혼합될 때 사용",
+          "-1": "변동성 상승 시 감축과 peak response가 base보다 낮은 tolerance를 일관되게 보일 때만 사용",
+          "+1": "고변동 배정 수준과 raw decision이 base보다 높은 tolerance를 일관되게 보일 때만 사용"
+        }
+      },
+      "information_sensitivity": {
+        "rubric_id": "information_sensitivity_v1",
+        "primary_evidence": [
+          "behavioral_analysis.episode5.summary_features.external_information_sensitivity"
+        ],
+        "supporting_evidence": [
+          "behavioral_analysis.episode5.summary_features.information_adjustment_rate",
+          "behavioral_analysis.episode5.summary_features.information_counter_adjustment_count",
+          "behavioral_analysis.episode5.summary_features.conflict_hold_count",
+          "behavioral_analysis.episode5.information_events"
+        ],
+        "anchor_calculation": "E5 external_information_sensitivity를 그대로 사용",
+        "levels": {
+          "very_low": {
+            "quantitative_anchor": "0.000 <= anchor <= 0.025",
+            "behavioral_pattern": "상충 정보 이후 거의 항상 유지하거나 평균 변경폭이 2.5%p 이하임"
+          },
+          "low": {
+            "quantitative_anchor": "0.025 < anchor <= 0.075",
+            "behavioral_pattern": "정보에 반응하지만 평균 변경폭이 작고 유지 결정이 많음"
+          },
+          "medium": {
+            "quantitative_anchor": "0.075 < anchor <= 0.150",
+            "behavioral_pattern": "정보 후 중간 수준 변경이 반복적으로 나타남"
+          },
+          "high": {
+            "quantitative_anchor": "0.150 < anchor <= 0.250",
+            "behavioral_pattern": "정보가 위험비중에 큰 변화를 자주 유발함"
+          },
+          "very_high": {
+            "quantitative_anchor": "0.250 < anchor <= 1.000",
+            "behavioral_pattern": "상충 정보만으로도 매우 큰 위험비중 변화가 나타남"
+          }
+        },
+        "anchor": {
+          "type": "path_value",
+          "path": "behavioral_analysis.episode5.summary_features.external_information_sensitivity",
+          "null_policy": "insufficient_evidence"
+        },
+        "cutoffs": [
+          {
+            "level": "very_low",
+            "min": 0,
+            "max": 0.025,
+            "min_inclusive": true,
+            "max_inclusive": true
+          },
+          {
+            "level": "low",
+            "min": 0.025,
+            "max": 0.075,
+            "min_inclusive": false,
+            "max_inclusive": true
+          },
+          {
+            "level": "medium",
+            "min": 0.075,
+            "max": 0.15,
+            "min_inclusive": false,
+            "max_inclusive": true
+          },
+          {
+            "level": "high",
+            "min": 0.15,
+            "max": 0.25,
+            "min_inclusive": false,
+            "max_inclusive": true
+          },
+          {
+            "level": "very_high",
+            "min": 0.25,
+            "max": 1,
+            "min_inclusive": false,
+            "max_inclusive": true
+          }
+        ],
+        "max_llm_adjustment_steps": 1,
+        "adjustment_guidance": {
+          "0": "supporting information evidence가 base와 일치하거나 혼합될 때 사용",
+          "-1": "adjustment rate, hold count와 세 information event가 base보다 한 단계 낮은 민감도를 일관되게 보일 때만 사용",
+          "+1": "adjustment rate, counter-adjustment와 raw event가 base보다 한 단계 높은 민감도를 일관되게 보일 때만 사용"
+        }
+      }
+    }
+  },
+  "stated_preference": {
+    "feature_version": "stated_v1",
+    "features": {
+      "risk_capacity_age": {
+        "include_in_llm": true,
+        "meaning": "연령대에 따른 장기적 위험 감수 여력을 0~1로 정규화한 보조 변수",
+        "direction": "higher = greater age-based risk capacity; not direct risk preference"
+      },
+      "investment_horizon": {
+        "include_in_llm": true,
+        "meaning": "응답한 투자 예정 기간을 0~1로 정규화한 값",
+        "direction": "higher = longer stated investment horizon"
+      },
+      "risky_asset_experience": {
+        "include_in_llm": true,
+        "meaning": "경험한 상품군 가운데 가장 높은 위험등급을 0~1로 정규화한 값",
+        "direction": "higher = experience with higher-risk products"
+      },
+      "experience_breadth": {
+        "include_in_llm": true,
+        "meaning": "선택한 서로 다른 투자상품 위험군 수를 전체 5개 위험군으로 나눈 값",
+        "direction": "higher = broader stated investment experience"
+      },
+      "derivative_experience": {
+        "include_in_llm": true,
+        "meaning": "응답한 파생상품 투자경험 기간을 0~1로 정규화한 값",
+        "direction": "higher = longer stated derivatives experience"
+      },
+      "stated_loss_tolerance": {
+        "include_in_llm": true,
+        "meaning": "사용자가 스스로 감내할 수 있다고 응답한 손실 수준을 0~1로 정규화한 값",
+        "direction": "higher = greater self-reported loss tolerance"
+      },
+      "investment_exposure": {
+        "include_in_llm": true,
+        "meaning": "총자산 중 투자성 자산 비중 응답을 0~1로 정규화한 값",
+        "direction": "higher = greater stated current investment exposure"
+      },
+      "financial_capacity": {
+        "include_in_llm": true,
+        "meaning": "월 소득 구간을 손실 감당 능력의 보조 변수로 0~1 정규화한 값",
+        "direction": "higher = greater income-based financial capacity; not direct preference"
+      },
+      "return_seeking": {
+        "include_in_llm": true,
+        "meaning": "투자 목적에서 기대수익 추구 정도를 0~1로 정규화한 값",
+        "direction": "higher = stronger stated return-seeking objective"
+      },
+      "financial_literacy": {
+        "include_in_llm": true,
+        "meaning": "금융상품 구조와 위험에 대한 자기보고 이해 수준을 0~1로 정규화한 값",
+        "direction": "higher = greater self-reported financial literacy"
+      },
+      "stated_risk_tolerance": {
+        "include_in_llm": false,
+        "meaning": "종합 위험선호로 오해될 수 있으며 다른 stated preference 증거와 중복되는 레거시 항목",
+        "exclusion_reason": "redundant stated-preference feature; not stored or exported"
+      },
+      "vulnerability_flag": {
+        "include_in_llm": false,
+        "meaning": "투자자 보호를 위한 취약투자자 해당 여부 표시",
+        "exclusion_reason": "investor-protection metadata, not investment-preference evidence"
+      }
+    }
+  }
+}

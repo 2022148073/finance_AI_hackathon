@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import (
@@ -26,6 +26,13 @@ from database import (
     upsert_episode5_features,
     upsert_episode6_features,
     upsert_profile_cross_context,
+)
+from llm_pipeline import (
+    AnalysisEligibilityError,
+    AnalysisPipelineError,
+    create_or_restore_analysis_run,
+    execute_analysis_run,
+    get_public_analysis_run,
 )
 from features import (
     calculate_episode1_features,
@@ -825,6 +832,50 @@ def create_app(
     @application.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @application.post("/api/analysis/runs", status_code=status.HTTP_202_ACCEPTED)
+    def start_analysis_run(
+        payload: StartSessionRequest,
+        request: Request,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, object]:
+        """Start or restore the private two-call LLM analysis pipeline."""
+        database = Path(request.app.state.database_path)
+        try:
+            run = create_or_restore_analysis_run(database, payload.user_id)
+        except AnalysisEligibilityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+            ) from exc
+        except AnalysisPipelineError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="분석 서비스 설정을 확인해 주세요.",
+            ) from exc
+        if run["status"] == "queued":
+            background_tasks.add_task(
+                execute_analysis_run,
+                database,
+                str(run["analysis_id"]),
+                payload.user_id,
+            )
+        return run
+
+    @application.get("/api/analysis/runs/{analysis_id}")
+    def restore_analysis_run(
+        analysis_id: str,
+        request: Request,
+        user_id: str = Query(
+            min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
+        ),
+    ) -> dict[str, object]:
+        """Return only status and the sanitized user-facing result."""
+        run = get_public_analysis_run(
+            Path(request.app.state.database_path), analysis_id, user_id
+        )
+        if run is None:
+            raise HTTPException(status_code=404, detail="분석 결과를 찾을 수 없습니다.")
+        return run
 
     @application.post("/api/survey/sessions")
     def start_survey(

@@ -1,7 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Survey from "./Survey.jsx";
 
 const API_BASE = window.__API_BASE_URL__ ?? "http://127.0.0.1:8000";
+const ANALYSIS_POLL_INTERVAL_MS = 1500;
+const ANALYSIS_POLL_TIMEOUT_MS = 6 * 60 * 1000;
+const DIMENSION_LABELS = {
+  risk_engagement: "위험자산 참여 성향",
+  loss_resilience: "손실 대응 성향",
+  volatility_tolerance: "변동성 대응 성향",
+  information_sensitivity: "외부정보 민감도",
+};
+const LEVEL_LABELS = {
+  very_low: "매우 낮음",
+  low: "낮음",
+  medium: "보통",
+  high: "높음",
+  very_high: "매우 높음",
+};
 
 function getUserId() {
   const key = "experiment_user_id";
@@ -114,6 +129,105 @@ async function api(path, options = {}) {
   return body;
 }
 
+function AnalysisResult({ run, onRetry }) {
+  if (!run || run.status === "queued" || run.status === "processing") {
+    return (
+      <main className="center-message analysis-state">
+        <section className="completed-card analysis-status-card" aria-live="polite">
+          <div className="analysis-spinner" aria-hidden="true" />
+          <p className="eyebrow">ANALYZING</p>
+          <h2>투자 행동을 분석하고 있습니다.</h2>
+          <p>{run?.message ?? "분석을 준비하고 있습니다."}</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (run.status === "failed") {
+    return (
+      <main className="center-message analysis-state">
+        <section className="completed-card analysis-status-card">
+          <p className="eyebrow">ANALYSIS PAUSED</p>
+          <h2>분석을 완료하지 못했습니다.</h2>
+          <p>{run.message}</p>
+          <button className="submit-button" type="button" onClick={onRetry}>
+            다시 시도
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  const result = run.result;
+  const analysis = result.analysis;
+  const confidencePercent = Math.round(analysis.confidence * 100);
+  return (
+    <main className="app-shell analysis-shell">
+      <header className="page-header analysis-header">
+        <div>
+          <p className="eyebrow">FINAL ANALYSIS</p>
+          <h1>투자 성향 분석 결과</h1>
+          <p className="subtitle">설문 응답과 실제 시장 선택을 구분해 비교했습니다.</p>
+        </div>
+      </header>
+
+      <section className="profile-comparison-grid">
+        <article className="result-card">
+          <span>설문 기반 성향</span>
+          <strong>{result.stated_profile}</strong>
+        </article>
+        <article className="result-card emphasized">
+          <span>행동 기반 성향</span>
+          <strong>{result.revealed_profile ?? "분석 근거 부족"}</strong>
+        </article>
+      </section>
+
+      <section className="analysis-card">
+        <p className="eyebrow">KEY BEHAVIOR</p>
+        <h2>핵심 행동 특성</h2>
+        <div className="trait-grid">
+          {Object.entries(result.behavioral_traits).map(([name, trait]) => (
+            <div className="trait-row" key={name}>
+              <span>{DIMENSION_LABELS[name] ?? name}</span>
+              <strong>{LEVEL_LABELS[trait.level] ?? "근거 부족"}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="analysis-card">
+        <p className="eyebrow">STATED PREFERENCE</p>
+        <h2>설문 응답 요약</h2>
+        <p className="analysis-description">{analysis.stated_preference_summary}</p>
+      </section>
+
+      <section className="analysis-card">
+        <p className="eyebrow">REVEALED PREFERENCE</p>
+        <h2>행동 응답 요약</h2>
+        <p className="analysis-description">{analysis.revealed_preference_summary}</p>
+      </section>
+
+      <section className="analysis-card">
+        <p className="eyebrow">COMPARISON</p>
+        <h2>설문과 행동의 차이</h2>
+        <p className="analysis-description">{analysis.stated_revealed_gap}</p>
+        <ul className="gap-list">
+          {analysis.key_behavioral_evidence.map((evidence, index) => (
+            <li key={`${index}-${evidence}`}>{evidence}</li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="analysis-card final-analysis-card">
+        <p className="eyebrow">FINAL INTERPRETATION</p>
+        <h2>종합 해석</h2>
+        <p className="analysis-confidence">해석 신뢰도 {confidencePercent}%</p>
+        <p className="analysis-description">{analysis.final_analysis}</p>
+      </section>
+    </main>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [questionnaire, setQuestionnaire] = useState(null);
@@ -122,6 +236,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [analysisRun, setAnalysisRun] = useState(null);
+  const analysisRequestToken = useRef(0);
 
   async function startEpisode(number) {
     return api(`/api/episode${number}/sessions`, {
@@ -283,6 +399,57 @@ export default function App() {
     }
   }
 
+  async function startAnalysis() {
+    const token = analysisRequestToken.current + 1;
+    analysisRequestToken.current = token;
+    setError("");
+    setAnalysisRun({ status: "queued", message: "분석을 준비하고 있습니다." });
+    const deadline = Date.now() + ANALYSIS_POLL_TIMEOUT_MS;
+    try {
+      let run = await api("/api/analysis/runs", {
+        method: "POST",
+        body: JSON.stringify({ user_id: getUserId() }),
+      });
+      if (analysisRequestToken.current !== token) return;
+      setAnalysisRun(run);
+      while (run.status === "queued" || run.status === "processing") {
+        if (Date.now() >= deadline) {
+          throw new Error("분석 대기 시간이 초과되었습니다. 상태를 다시 확인해 주세요.");
+        }
+        await new Promise((resolve) => setTimeout(resolve, ANALYSIS_POLL_INTERVAL_MS));
+        if (analysisRequestToken.current !== token) return;
+        run = await api(
+          `/api/analysis/runs/${run.analysis_id}?user_id=${encodeURIComponent(getUserId())}`,
+        );
+        if (analysisRequestToken.current !== token) return;
+        setAnalysisRun(run);
+      }
+    } catch (reason) {
+      if (analysisRequestToken.current !== token) return;
+      setAnalysisRun({
+        status: "failed",
+        message: reason.message || "분석을 완료하지 못했습니다.",
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (
+      session?.episode === "E6" &&
+      session.episode_status === "completed" &&
+      analysisRun === null
+    ) {
+      startAnalysis();
+    }
+  }, [session?.episode, session?.episode_status, analysisRun]);
+
+  useEffect(
+    () => () => {
+      analysisRequestToken.current += 1;
+    },
+    [],
+  );
+
   if (loading) {
     return <main className="center-message">시나리오를 준비하고 있습니다…</main>;
   }
@@ -318,6 +485,9 @@ export default function App() {
   }
   if (!session) {
     return <main className="center-message error">{error}</main>;
+  }
+  if (session.episode === "E6" && session.episode_status === "completed") {
+    return <AnalysisResult run={analysisRun} onRetry={startAnalysis} />;
   }
 
   return (

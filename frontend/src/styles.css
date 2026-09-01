@@ -445,6 +445,154 @@ h2 {
   font-weight: 700;
 }
 
+.analysis-shell {
+  width: min(940px, calc(100% - 32px));
+}
+
+.analysis-header {
+  align-items: flex-start;
+}
+
+.analysis-state {
+  padding: 24px;
+}
+
+.analysis-status-card {
+  width: min(520px, 100%);
+  padding: 34px;
+}
+
+.analysis-spinner {
+  width: 34px;
+  height: 34px;
+  margin: 0 auto 18px;
+  border: 4px solid #d9e8e2;
+  border-top-color: #17765b;
+  border-radius: 50%;
+  animation: analysis-spin 900ms linear infinite;
+}
+
+@keyframes analysis-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.profile-comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.result-card,
+.analysis-card {
+  border: 1px solid #dce3e8;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 12px 34px rgb(31 50 66 / 7%);
+}
+
+.result-card {
+  padding: 24px;
+}
+
+.result-card span,
+.result-card strong {
+  display: block;
+}
+
+.result-card span {
+  margin-bottom: 8px;
+  color: #66737f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.result-card strong {
+  font-size: 26px;
+}
+
+.result-card.emphasized {
+  border-color: #73af9c;
+  background: #f1f8f5;
+}
+
+.analysis-card {
+  margin-top: 16px;
+  padding: 26px;
+}
+
+.trait-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.trait-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 16px;
+  border-radius: 11px;
+  background: #f5f8fa;
+}
+
+.trait-row span {
+  color: #52606d;
+  font-size: 14px;
+}
+
+.trait-row strong {
+  color: #0d684c;
+  white-space: nowrap;
+}
+
+.analysis-description {
+  margin-bottom: 0;
+  color: #475662;
+  line-height: 1.75;
+}
+
+.analysis-confidence {
+  display: inline-block;
+  margin: 0 0 14px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: #0d684c;
+  background: #eaf6f2;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.final-analysis-card {
+  border-color: #9fcbbd;
+}
+
+.gap-list {
+  margin: 18px 0 0;
+  padding-left: 22px;
+  color: #475662;
+  line-height: 1.7;
+}
+
+.interpretation-notes {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.interpretation-notes p {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 11px;
+  color: #52606d;
+  background: #f5f8fa;
+  line-height: 1.65;
+}
+
 @media (max-width: 720px) {
   .app-shell {
     width: min(100% - 20px, 1120px);
@@ -479,6 +627,11 @@ h2 {
   }
 
   .stimulus-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-comparison-grid,
+  .trait-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -318,6 +318,34 @@ CREATE TABLE IF NOT EXISTS survey_results (
     calculated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS llm_analysis_runs (
+    analysis_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('queued','processing','completed','failed')
+    ),
+    model TEXT NOT NULL,
+    manifest_schema_version TEXT NOT NULL,
+    behavioral_input_schema_version TEXT NOT NULL,
+    comparison_input_schema_version TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    error_code TEXT,
+    internal_error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS llm_analysis_runs_user_created
+ON llm_analysis_runs (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS llm_analysis_artifacts (
+    analysis_id TEXT PRIMARY KEY REFERENCES llm_analysis_runs(analysis_id),
+    call1_raw_response_json TEXT,
+    revealed_result_json TEXT,
+    call2_raw_response_json TEXT,
+    public_result_json TEXT
+);
+
 CREATE TRIGGER IF NOT EXISTS survey_responses_no_update
 BEFORE UPDATE ON survey_responses
 BEGIN SELECT RAISE(ABORT, 'survey_responses are append-only'); END;
