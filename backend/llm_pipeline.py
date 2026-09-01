@@ -44,6 +44,7 @@ DEFAULT_KIMI_TEMPERATURE = 1.0
 DEFAULT_KIMI_MAX_TOKENS = 16384
 DEFAULT_KIMI_TIMEOUT_SECONDS = 120.0
 DEFAULT_KIMI_MAX_RETRIES = 1
+DEFAULT_KIMI_ANALYSIS_REVISION = "v1"
 KIMI_REASONING_EFFORTS = {"low", "high", "max"}
 PUBLIC_STATUS_MESSAGES = {
     "queued": "분석을 준비하고 있습니다.",
@@ -79,6 +80,7 @@ class KimiSettings:
     base_url: str
     model: str
     reasoning_effort: str
+    analysis_config_version: str
     temperature: float
     max_tokens: int
     timeout_seconds: float
@@ -96,6 +98,9 @@ def _runtime_settings() -> KimiSettings:
     reasoning_effort = os.getenv(
         "KIMI_REASONING_EFFORT", DEFAULT_KIMI_REASONING_EFFORT
     ).strip().lower()
+    analysis_revision = os.getenv(
+        "KIMI_ANALYSIS_REVISION", DEFAULT_KIMI_ANALYSIS_REVISION
+    ).strip().lower()
     if not base_url or not model:
         raise AnalysisPipelineError(
             "configuration_error", "NVIDIA_BASE_URL and KIMI_MODEL are required"
@@ -104,6 +109,14 @@ def _runtime_settings() -> KimiSettings:
         raise AnalysisPipelineError(
             "configuration_error",
             "KIMI_REASONING_EFFORT must be low, high, or max",
+        )
+    if not analysis_revision or not all(
+        character.isalnum() or character in {"-", "_"}
+        for character in analysis_revision
+    ):
+        raise AnalysisPipelineError(
+            "configuration_error",
+            "KIMI_ANALYSIS_REVISION must contain only letters, numbers, - or _",
         )
     try:
         temperature = float(
@@ -133,11 +146,16 @@ def _runtime_settings() -> KimiSettings:
         raise AnalysisPipelineError(
             "configuration_error", "Kimi-K3 runtime setting is out of range"
         )
+    model_token = model.rsplit("/", 1)[-1].replace("-", "_")
+    analysis_config_version = (
+        f"{model_token}_{reasoning_effort}_{analysis_revision}"
+    )
     return KimiSettings(
         api_key=api_key,
         base_url=base_url.rstrip("/"),
         model=model,
         reasoning_effort=reasoning_effort,
+        analysis_config_version=analysis_config_version,
         temperature=temperature,
         max_tokens=max_tokens,
         timeout_seconds=timeout,
@@ -195,6 +213,8 @@ def create_or_restore_analysis_run(
             latest_is_current = latest is not None and all(
                 (
                     latest["model"] == settings.model,
+                    latest["analysis_config_version"]
+                    == settings.analysis_config_version,
                     latest["manifest_schema_version"] == manifest["schema_version"],
                     latest["behavioral_input_schema_version"]
                     == versions["behavioral"],
@@ -246,13 +266,15 @@ def create_or_restore_analysis_run(
             analysis_id = str(uuid.uuid4())
             connection.execute(
                 "INSERT INTO llm_analysis_runs (analysis_id,user_id,status,model,"
+                "analysis_config_version,"
                 "manifest_schema_version,behavioral_input_schema_version,"
                 "comparison_input_schema_version,created_at,updated_at) "
-                "VALUES (?,?,'queued',?,?,?,?,?,?)",
+                "VALUES (?,?,'queued',?,?,?,?,?,?,?)",
                 (
                     analysis_id,
                     user_id,
                     settings.model,
+                    settings.analysis_config_version,
                     manifest["schema_version"],
                     versions["behavioral"],
                     versions["comparison"],
@@ -285,6 +307,13 @@ def _behavioral_response_schema(
     for name in dimensions:
         base_level = baselines[name]["base_level"]
         maximum = int(baselines[name]["max_llm_adjustment_steps"])
+        rubric = manifest["behavioral_dimension_rubrics"]["dimensions"][name]
+        allowed_evidence = list(
+            dict.fromkeys(
+                list(rubric["primary_evidence"])
+                + list(rubric["supporting_evidence"])
+            )
+        )
         properties[name] = {
             "type": "object",
             "properties": {
@@ -302,8 +331,9 @@ def _behavioral_response_schema(
                 "reason": {"type": "string", "minLength": 1},
                 "evidence_fields": {
                     "type": "array",
-                    "items": {"type": "string", "minLength": 1},
+                    "items": {"type": "string", "enum": allowed_evidence},
                     "minItems": 1,
+                    "uniqueItems": True,
                 },
             },
             "required": list(dimensions[name]),
@@ -348,15 +378,23 @@ def _comparison_response_schema(
             }
         if name == "investor_type":
             return {"type": "string", "enum": [str(value)]}
-        if name == "confidence":
-            return {"type": "number", "minimum": 0, "maximum": 1}
+        if name == "confidence_level":
+            return {
+                "type": "string",
+                "enum": list(
+                    manifest["revealed_profile_scoring"]["confidence_levels"]
+                ),
+            }
         return {"type": "string", "minLength": 1}
 
     return field_schema("root", template)
 
 
 def _validate_response_shape(
-    value: Any, template: Any, path: str = "response"
+    value: Any,
+    template: Any,
+    manifest: Mapping[str, Any],
+    path: str = "response",
 ) -> None:
     """Defensively validate the manifest/builder output shape after parsing."""
     if isinstance(template, dict):
@@ -365,7 +403,9 @@ def _validate_response_shape(
                 "invalid_response", f"{path} fields do not match the required format"
             )
         for name, child_template in template.items():
-            _validate_response_shape(value[name], child_template, f"{path}.{name}")
+            _validate_response_shape(
+                value[name], child_template, manifest, f"{path}.{name}"
+            )
         return
     if isinstance(template, list):
         if not isinstance(value, list) or not all(
@@ -379,15 +419,15 @@ def _validate_response_shape(
                 "invalid_response", f"{path} must contain at least one field"
             )
         return
-    if isinstance(template, float):
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not 0 <= float(value) <= 1
-        ):
-            raise AnalysisPipelineError(
-                "invalid_response", f"{path} must be a number between 0 and 1"
+    if path.endswith("confidence_level"):
+        confidence_levels = set(
+            manifest["revealed_profile_scoring"]["confidence_levels"]
         )
+        if value not in confidence_levels:
+            raise AnalysisPipelineError(
+                "invalid_response",
+                f"{path} must match a manifest confidence level",
+            )
         return
     if isinstance(template, str) and value != template:
         raise AnalysisPipelineError(
@@ -493,8 +533,10 @@ def _update_artifact(
     database_path: Path, analysis_id: str, column: str, payload: Mapping[str, Any]
 ) -> None:
     allowed = {
+        "behavioral_input_json",
         "call1_raw_response_json",
         "revealed_result_json",
+        "comparison_input_json",
         "call2_raw_response_json",
         "public_result_json",
     }
@@ -565,6 +607,12 @@ def execute_analysis_run(
             "feature_guide": _behavioral_feature_guide(manifest),
             "user_behavioral_input": behavioral_input,
         }
+        _update_artifact(
+            database_path,
+            analysis_id,
+            "behavioral_input_json",
+            call1_payload,
+        )
         call1_result = _call_structured(
             settings=settings,
             schema_name="revealed_behavioral_dimensions",
@@ -598,6 +646,17 @@ def execute_analysis_run(
             finalized_revealed,
         )
 
+        call2_payload = {
+            "feature_guide": build_feature_guide(manifest),
+            "comparison_input": comparison_input,
+        }
+        _update_artifact(
+            database_path,
+            analysis_id,
+            "comparison_input_json",
+            call2_payload,
+        )
+
         call2_result = _call_structured(
             settings=settings,
             schema_name="stated_revealed_interpretation",
@@ -614,14 +673,12 @@ def execute_analysis_run(
                 "scales. Write every user-facing prose field in Korean. Return only "
                 "schema-valid JSON."
             ),
-            payload={
-                "feature_guide": build_feature_guide(manifest),
-                "comparison_input": comparison_input,
-            },
+            payload=call2_payload,
         )
         _validate_response_shape(
             call2_result,
             comparison_input["analysis_request"]["required_output_format"],
+            manifest,
         )
         _update_artifact(
             database_path, analysis_id, "call2_raw_response_json", call2_result

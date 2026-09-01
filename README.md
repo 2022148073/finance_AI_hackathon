@@ -42,6 +42,7 @@ NVIDIA_API_KEY=your_nvidia_api_key_here
 NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
 KIMI_MODEL=moonshotai/kimi-k3
 KIMI_REASONING_EFFORT=low
+KIMI_ANALYSIS_REVISION=v1
 KIMI_TEMPERATURE=1.0
 KIMI_MAX_TOKENS=16384
 KIMI_TIMEOUT_SECONDS=120
@@ -53,6 +54,11 @@ KIMI_MAX_RETRIES=1
 사용자에게만 `POST /api/analysis/runs`가 분석 작업을 생성하고,
 `GET /api/analysis/runs/{analysis_id}`는 처리 상태와 사용자 공개용 결과만
 반환합니다.
+
+분석 캐시는 모델·reasoning effort·`KIMI_ANALYSIS_REVISION`을 조합한 설정
+버전별로 분리됩니다. 따라서 `low`에서 `max`로 변경하면 기존 `low` 결과를
+재사용하지 않습니다. schema 변경 없이 프롬프트나 기타 실행 의미를 바꿀 때는
+`KIMI_ANALYSIS_REVISION`을 올립니다.
 
 ## API 흐름
 

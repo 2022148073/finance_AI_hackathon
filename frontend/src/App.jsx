@@ -17,6 +17,11 @@ const LEVEL_LABELS = {
   high: "높음",
   very_high: "매우 높음",
 };
+const CONFIDENCE_LABELS = {
+  low: "낮음",
+  medium: "보통",
+  high: "높음",
+};
 
 function getUserId() {
   const key = "experiment_user_id";
@@ -160,7 +165,8 @@ function AnalysisResult({ run, onRetry }) {
 
   const result = run.result;
   const analysis = result.analysis;
-  const confidencePercent = Math.round(analysis.confidence * 100);
+  const confidenceLabel =
+    CONFIDENCE_LABELS[analysis.confidence_level] ?? "근거 부족";
   return (
     <main className="app-shell analysis-shell">
       <header className="page-header analysis-header">
@@ -221,7 +227,7 @@ function AnalysisResult({ run, onRetry }) {
       <section className="analysis-card final-analysis-card">
         <p className="eyebrow">FINAL INTERPRETATION</p>
         <h2>종합 해석</h2>
-        <p className="analysis-confidence">해석 신뢰도 {confidencePercent}%</p>
+        <p className="analysis-confidence">해석 신뢰도 {confidenceLabel}</p>
         <p className="analysis-description">{analysis.final_analysis}</p>
       </section>
     </main>

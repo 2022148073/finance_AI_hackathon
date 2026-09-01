@@ -325,6 +325,7 @@ CREATE TABLE IF NOT EXISTS llm_analysis_runs (
         status IN ('queued','processing','completed','failed')
     ),
     model TEXT NOT NULL,
+    analysis_config_version TEXT NOT NULL,
     manifest_schema_version TEXT NOT NULL,
     behavioral_input_schema_version TEXT NOT NULL,
     comparison_input_schema_version TEXT NOT NULL,
@@ -340,8 +341,10 @@ ON llm_analysis_runs (user_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS llm_analysis_artifacts (
     analysis_id TEXT PRIMARY KEY REFERENCES llm_analysis_runs(analysis_id),
+    behavioral_input_json TEXT,
     call1_raw_response_json TEXT,
     revealed_result_json TEXT,
+    comparison_input_json TEXT,
     call2_raw_response_json TEXT,
     public_result_json TEXT
 );
@@ -722,6 +725,26 @@ def initialize_database(database_path: Path) -> None:
                 "ALTER TABLE profile_features RENAME COLUMN "
                 "cross_contest_consistency TO cross_context_consistency"
             )
+
+        run_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(llm_analysis_runs)")
+        }
+        if "analysis_config_version" not in run_columns:
+            connection.execute(
+                "ALTER TABLE llm_analysis_runs ADD COLUMN "
+                "analysis_config_version TEXT NOT NULL DEFAULT 'legacy'"
+            )
+
+        artifact_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(llm_analysis_artifacts)")
+        }
+        for column in ("behavioral_input_json", "comparison_input_json"):
+            if column not in artifact_columns:
+                connection.execute(
+                    f"ALTER TABLE llm_analysis_artifacts ADD COLUMN {column} TEXT"
+                )
         connection.commit()
 
 

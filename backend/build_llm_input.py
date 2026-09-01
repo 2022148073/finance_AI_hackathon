@@ -655,7 +655,7 @@ def _resolve_json_path(payload: Mapping[str, Any], path: str) -> Any:
     value: Any = payload
     for segment in path.split("."):
         if not isinstance(value, Mapping) or segment not in value:
-            raise LlmInputBuildError(f"Rubric anchor path does not exist: {path}")
+            raise LlmInputBuildError(f"Manifest JSON path does not exist: {path}")
         value = value[segment]
     return value
 
@@ -792,6 +792,7 @@ def _extract_dimension_result(
     revealed_result: Mapping[str, Any],
     manifest: Mapping[str, Any],
     quantitative_baselines: Mapping[str, Mapping[str, Any]],
+    behavioral_analysis: Mapping[str, Any],
 ) -> dict[str, dict[str, Any]]:
     dimensions = revealed_result.get("revealed_behavioral_dimensions")
     if not isinstance(dimensions, dict):
@@ -864,6 +865,26 @@ def _extract_dimension_result(
             raise LlmInputBuildError(
                 f"{name} evidence_fields must contain at least one non-empty path"
             )
+        rubric = manifest["behavioral_dimension_rubrics"]["dimensions"][name]
+        allowed_evidence = set(rubric["primary_evidence"]) | set(
+            rubric["supporting_evidence"]
+        )
+        invalid_evidence = [
+            field for field in evidence if field not in allowed_evidence
+        ]
+        if invalid_evidence:
+            raise LlmInputBuildError(
+                f"{name} evidence_fields are outside its manifest rubric: "
+                + ", ".join(invalid_evidence)
+            )
+        evidence_payload = {"behavioral_analysis": behavioral_analysis}
+        for field in evidence:
+            try:
+                _resolve_json_path(evidence_payload, field)
+            except LlmInputBuildError as exc:
+                raise LlmInputBuildError(
+                    f"{name} evidence field does not exist in the actual input: {field}"
+                ) from exc
         cleaned[name] = {
             "base_level": base_level,
             "adjustment": adjustment,
@@ -879,10 +900,11 @@ def calculate_revealed_profile(
     revealed_result: Mapping[str, Any],
     manifest: Mapping[str, Any],
     quantitative_baselines: Mapping[str, Mapping[str, Any]],
+    behavioral_analysis: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     """Deterministically convert the three core ordinal dimensions to a profile."""
     dimensions = _extract_dimension_result(
-        revealed_result, manifest, quantitative_baselines
+        revealed_result, manifest, quantitative_baselines, behavioral_analysis
     )
     scoring = manifest["revealed_profile_scoring"]
     ordinal_values = scoring["ordinal_values"]
@@ -979,7 +1001,7 @@ def _comparison_request(
         "confidence_levels": list(scoring["confidence_levels"]),
         "required_output_format": {
             "investor_type": investor_type,
-            "confidence": 0.0,
+            "confidence_level": None,
             "stated_preference_summary": None,
             "revealed_preference_summary": None,
             "stated_revealed_gap": None,
@@ -1044,7 +1066,7 @@ def build_comparison_input(
         behavioral, manifest
     )
     revealed_profile, dimensions = calculate_revealed_profile(
-        revealed_result, manifest, quantitative_baselines
+        revealed_result, manifest, quantitative_baselines, behavioral
     )
     cross_context = behavioral["episode6"]["summary_features"][
         "cross_context_consistency"

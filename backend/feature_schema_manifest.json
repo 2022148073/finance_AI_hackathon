@@ -1,10 +1,10 @@
 {
-  "schema_version": "llm_feature_schema_manifest_v3",
+  "schema_version": "llm_feature_schema_manifest_v4",
   "feature_schema_version": "llm_features_v1",
   "feature_selection_schema_version": "llm_feature_selection_v1",
   "input_schema_versions": {
-    "behavioral": "llm_behavioral_input_v2",
-    "comparison": "llm_comparison_input_v4"
+    "behavioral": "llm_behavioral_input_v3",
+    "comparison": "llm_comparison_input_v5"
   },
   "policy": {
     "allowlist_only": true,
@@ -712,7 +712,7 @@
     },
     "dimensions": {
       "risk_engagement": {
-        "rubric_id": "risk_engagement_v1",
+        "rubric_id": "risk_engagement_v2",
         "primary_evidence": [
           "behavioral_analysis.episode3.adaptive_context.routing_score"
         ],
@@ -721,10 +721,13 @@
           "behavioral_analysis.episode2.summary_features.uptrend_risk_exposure",
           "behavioral_analysis.episode1.summary_features.market_participation_rate",
           "behavioral_analysis.episode1.summary_features.time_to_first_entry",
+          "behavioral_analysis.episode6.summary_features.anchor_risk_exposure_auc",
+          "behavioral_analysis.episode6.summary_features.risk_engagement_consistency",
           "behavioral_analysis.episode1.decisions",
-          "behavioral_analysis.episode2.decisions"
+          "behavioral_analysis.episode2.decisions",
+          "behavioral_analysis.episode6.decisions"
         ],
-        "anchor_calculation": "E3 adaptive_context.routing_score를 그대로 사용하며 이 값은 기존 E1 0.7, E2 0.3 위험노출 결합값",
+        "anchor_calculation": "E3 adaptive_context.routing_score를 그대로 사용하며 이 값은 기존 E1 0.7, E2 0.3 위험노출 결합값이다. E6 공통시장 위험노출과 일치도는 base를 대체하지 않고 ±1 supporting calibration에만 사용한다",
         "levels": {
           "very_low": {
             "quantitative_anchor": "0.00 <= anchor <= 0.20",
