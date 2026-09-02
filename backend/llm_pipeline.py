@@ -339,7 +339,7 @@ def _behavioral_response_schema(
                     "type": "array",
                     "items": {"type": "string", "enum": allowed_evidence},
                     "minItems": 1,
-                    "uniqueItems": True,
+                    # "uniqueItems": True,
                 },
             },
             "required": list(dimensions[name]),

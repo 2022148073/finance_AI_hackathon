@@ -865,6 +865,8 @@ def _extract_dimension_result(
             raise LlmInputBuildError(
                 f"{name} evidence_fields must contain at least one non-empty path"
             )
+        # harmless normalization
+        evidence = list(dict.fromkeys(evidence))
         rubric = manifest["behavioral_dimension_rubrics"]["dimensions"][name]
         allowed_evidence = set(rubric["primary_evidence"]) | set(
             rubric["supporting_evidence"]
