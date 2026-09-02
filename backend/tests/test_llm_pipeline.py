@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import sys
 import tempfile
 import unittest
+import uuid
 from contextlib import closing
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -22,6 +24,7 @@ from build_llm_input import (  # noqa: E402
 from database import connect, initialize_database  # noqa: E402
 from llm_pipeline import (  # noqa: E402
     AnalysisPipelineError,
+    _call_structured,
     _comparison_response_schema,
     _runtime_settings,
     _update_artifact,
@@ -109,6 +112,96 @@ class LlmPipelineTargetedTests(unittest.TestCase):
             [row["analysis_config_version"] for row in rows],
             ["kimi_k3_low_v1", "kimi_k3_max_v1"],
         )
+
+    def test_kimi_timeout_and_pending_poll_interval_are_configured(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "KIMI_TIMEOUT_SECONDS": "600",
+                "KIMI_STATUS_POLL_INTERVAL_SECONDS": "2",
+            },
+        ):
+            settings = _runtime_settings()
+        self.assertEqual(settings.timeout_seconds, 600.0)
+        self.assertEqual(settings.status_poll_interval_seconds, 2.0)
+
+    @staticmethod
+    def _http_response(status_code: int, payload: dict[str, object]) -> MagicMock:
+        response = MagicMock()
+        response.status_code = status_code
+        response.json.return_value = payload
+        response.text = str(payload)
+        return response
+
+    def test_kimi_202_is_polled_until_final_200(self) -> None:
+        request_id = str(uuid.uuid4())
+        pending = self._http_response(202, {"requestId": request_id})
+        pending_again = self._http_response(202, {"requestId": request_id})
+        expected = {"result": "ok"}
+        completed = self._http_response(
+            200,
+            {
+                "choices": [
+                    {"message": {"content": json.dumps(expected)}}
+                ]
+            },
+        )
+        client = MagicMock()
+        client.post.return_value = pending
+        client.get.side_effect = [pending_again, completed]
+        client_context = MagicMock()
+        client_context.__enter__.return_value = client
+        with patch.dict(
+            os.environ,
+            {
+                "NVIDIA_API_KEY": "test-key",
+                "KIMI_STATUS_POLL_INTERVAL_SECONDS": "0.1",
+            },
+        ):
+            settings = _runtime_settings()
+        with (
+            patch("llm_pipeline.httpx.Client", return_value=client_context),
+            patch("llm_pipeline.time.sleep"),
+        ):
+            result = _call_structured(
+                settings=settings,
+                schema_name="test_schema",
+                schema={"type": "object"},
+                system_prompt="test",
+                payload={"value": 1},
+            )
+
+        self.assertEqual(result, expected)
+        client.post.assert_called_once()
+        self.assertEqual(client.get.call_count, 2)
+        status_url = client.get.call_args_list[0].args[0]
+        self.assertEqual(
+            status_url,
+            f"https://integrate.api.nvidia.com/v1/status/{request_id}",
+        )
+        posted_json = client.post.call_args.kwargs["json"]
+        self.assertEqual(posted_json["reasoning_effort"], "low")
+        self.assertEqual(posted_json["response_format"]["type"], "json_schema")
+
+    def test_kimi_202_without_uuid_request_id_is_rejected(self) -> None:
+        client = MagicMock()
+        client.post.return_value = self._http_response(
+            202, {"requestId": "not-a-uuid"}
+        )
+        client_context = MagicMock()
+        client_context.__enter__.return_value = client
+        with patch.dict(os.environ, {"NVIDIA_API_KEY": "test-key"}):
+            settings = _runtime_settings()
+        with patch("llm_pipeline.httpx.Client", return_value=client_context):
+            with self.assertRaisesRegex(AnalysisPipelineError, "UUID"):
+                _call_structured(
+                    settings=settings,
+                    schema_name="test_schema",
+                    schema={"type": "object"},
+                    system_prompt="test",
+                    payload={"value": 1},
+                )
+        client.get.assert_not_called()
 
     def test_private_input_snapshot_columns_are_migrated_and_writable(self) -> None:
         legacy_path = Path(self.temporary.name) / "legacy-llm.db"

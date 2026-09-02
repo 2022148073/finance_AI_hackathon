@@ -45,8 +45,8 @@ KIMI_REASONING_EFFORT=low
 KIMI_ANALYSIS_REVISION=v1
 KIMI_TEMPERATURE=1.0
 KIMI_MAX_TOKENS=16384
-KIMI_TIMEOUT_SECONDS=120
-KIMI_MAX_RETRIES=1
+KIMI_TIMEOUT_SECONDS=600
+KIMI_STATUS_POLL_INTERVAL_SECONDS=2
 ```
 
 `.env`는 Git에서 제외되며 프론트엔드 번들에 포함되지 않습니다. 환경변수를
@@ -59,6 +59,11 @@ KIMI_MAX_RETRIES=1
 버전별로 분리됩니다. 따라서 `low`에서 `max`로 변경하면 기존 `low` 결과를
 재사용하지 않습니다. schema 변경 없이 프롬프트나 기타 실행 의미를 바꿀 때는
 `KIMI_ANALYSIS_REVISION`을 올립니다.
+
+NVIDIA가 chat completion에 `202 Pending`과 `requestId`를 반환하면 backend가
+`/v1/status/{requestId}`를 `KIMI_STATUS_POLL_INTERVAL_SECONDS` 간격으로
+조회합니다. 최종 `200` 응답이 도착하거나 `KIMI_TIMEOUT_SECONDS`의 전체 호출
+기한이 끝날 때까지 같은 request를 복제하지 않고 기다립니다.
 
 ## API 흐름
 

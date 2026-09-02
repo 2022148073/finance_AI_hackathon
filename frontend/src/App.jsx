@@ -3,7 +3,10 @@ import Survey from "./Survey.jsx";
 
 const API_BASE = window.__API_BASE_URL__ ?? "http://127.0.0.1:8000";
 const ANALYSIS_POLL_INTERVAL_MS = 1500;
-const ANALYSIS_POLL_TIMEOUT_MS = 6 * 60 * 1000;
+// Kimi-K3 always reasons before returning structured output. Two sequential
+// calls may take several minutes, so keep a finite but sufficiently wide UI
+// deadline while the backend enforces a separate timeout per model call.
+const ANALYSIS_POLL_TIMEOUT_MS = 25 * 60 * 1000;
 const DIMENSION_LABELS = {
   risk_engagement: "위험자산 참여 성향",
   loss_resilience: "손실 대응 성향",

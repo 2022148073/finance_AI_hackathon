@@ -7,6 +7,7 @@ deterministic revealed profile.
 NVIDIA references (checked 2026-09-01):
 - https://build.nvidia.com/moonshotai/kimi-k3
 - https://docs.api.nvidia.com/nim/re/reference/moonshotai-kimi-k3
+- https://docs.api.nvidia.com/nim/reference/moonshotai-kimi-k3-statuspolling
 - https://docs.nvidia.com/nim/large-language-models/1.14.0/structured-generation.html
 """
 
@@ -15,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
@@ -22,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+import httpx
 from dotenv import load_dotenv
 
 from build_llm_input import (
@@ -42,8 +45,8 @@ DEFAULT_KIMI_MODEL = "moonshotai/kimi-k3"
 DEFAULT_KIMI_REASONING_EFFORT = "low"
 DEFAULT_KIMI_TEMPERATURE = 1.0
 DEFAULT_KIMI_MAX_TOKENS = 16384
-DEFAULT_KIMI_TIMEOUT_SECONDS = 120.0
-DEFAULT_KIMI_MAX_RETRIES = 1
+DEFAULT_KIMI_TIMEOUT_SECONDS = 600.0
+DEFAULT_KIMI_STATUS_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_KIMI_ANALYSIS_REVISION = "v1"
 KIMI_REASONING_EFFORTS = {"low", "high", "max"}
 PUBLIC_STATUS_MESSAGES = {
@@ -84,7 +87,7 @@ class KimiSettings:
     temperature: float
     max_tokens: int
     timeout_seconds: float
-    max_retries: int
+    status_poll_interval_seconds: float
 
 
 def _utc_now() -> str:
@@ -130,8 +133,11 @@ def _runtime_settings() -> KimiSettings:
                 "KIMI_TIMEOUT_SECONDS", str(DEFAULT_KIMI_TIMEOUT_SECONDS)
             )
         )
-        max_retries = int(
-            os.getenv("KIMI_MAX_RETRIES", str(DEFAULT_KIMI_MAX_RETRIES))
+        poll_interval = float(
+            os.getenv(
+                "KIMI_STATUS_POLL_INTERVAL_SECONDS",
+                str(DEFAULT_KIMI_STATUS_POLL_INTERVAL_SECONDS),
+            )
         )
     except ValueError as exc:
         raise AnalysisPipelineError(
@@ -141,7 +147,7 @@ def _runtime_settings() -> KimiSettings:
         not 0 <= temperature <= 1
         or not 1 <= max_tokens <= 65536
         or timeout <= 0
-        or max_retries < 0
+        or not 0.1 <= poll_interval <= 30
     ):
         raise AnalysisPipelineError(
             "configuration_error", "Kimi-K3 runtime setting is out of range"
@@ -159,7 +165,7 @@ def _runtime_settings() -> KimiSettings:
         temperature=temperature,
         max_tokens=max_tokens,
         timeout_seconds=timeout,
-        max_retries=max_retries,
+        status_poll_interval_seconds=poll_interval,
     )
 
 
@@ -458,60 +464,128 @@ def _call_structured(
         raise AnalysisPipelineError(
             "configuration_error", "NVIDIA_API_KEY is not configured"
         )
-    try:
-        from openai import (
-            APIConnectionError,
-            APIStatusError,
-            APITimeoutError,
-            OpenAI,
-            RateLimitError,
-        )
-    except ImportError as exc:
-        raise AnalysisPipelineError(
-            "configuration_error", "The openai Python package is not installed"
-        ) from exc
-
-    # NVIDIA NIM exposes an OpenAI-compatible Chat Completions endpoint. The
-    # SDK is only the transport client; requests are sent to NVIDIA, not OpenAI.
-    client = OpenAI(
-        api_key=settings.api_key,
-        base_url=settings.base_url,
-        timeout=settings.timeout_seconds,
-        max_retries=settings.max_retries,
-    )
-    try:
-        response = client.chat.completions.create(
-            model=settings.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": json.dumps(payload, ensure_ascii=False),
-                },
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": schema_name,
-                    "strict": True,
-                    "schema": dict(schema),
-                },
+    request_body = {
+        "model": settings.model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": json.dumps(payload, ensure_ascii=False),
             },
-            temperature=settings.temperature,
-            max_tokens=settings.max_tokens,
-            stream=False,
-            extra_body={"reasoning_effort": settings.reasoning_effort},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema_name,
+                "strict": True,
+                "schema": dict(schema),
+            },
+        },
+        "temperature": settings.temperature,
+        "max_tokens": settings.max_tokens,
+        "stream": False,
+        "reasoning_effort": settings.reasoning_effort,
+    }
+    headers = {
+        "Authorization": f"Bearer {settings.api_key}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    deadline = time.monotonic() + settings.timeout_seconds
+
+    def remaining_timeout() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AnalysisPipelineError(
+                "timeout", "Kimi-K3 pending result exceeded the polling deadline"
+            )
+        return remaining
+
+    def response_json(response: httpx.Response, stage: str) -> dict[str, Any]:
+        try:
+            value = response.json()
+        except ValueError as exc:
+            raise AnalysisPipelineError(
+                "invalid_response", f"NVIDIA {stage} response was not valid JSON"
+            ) from exc
+        if not isinstance(value, dict):
+            raise AnalysisPipelineError(
+                "invalid_response", f"NVIDIA {stage} response must be an object"
+            )
+        return value
+
+    def request_id_from(value: Mapping[str, Any]) -> str:
+        request_id = value.get("requestId")
+        if not isinstance(request_id, str) or len(request_id) > 36:
+            raise AnalysisPipelineError(
+                "invalid_response",
+                "NVIDIA pending response did not contain a valid requestId",
+            )
+        try:
+            uuid.UUID(request_id)
+        except ValueError as exc:
+            raise AnalysisPipelineError(
+                "invalid_response", "NVIDIA requestId was not a UUID"
+            ) from exc
+        return request_id
+
+    def ensure_supported_status(response: httpx.Response, stage: str) -> None:
+        if response.status_code in {200, 202}:
+            return
+        detail = response.text[:1000]
+        raise AnalysisPipelineError(
+            "upstream_error",
+            f"NVIDIA {stage} returned HTTP {response.status_code}: {detail}",
         )
-    except APITimeoutError as exc:
+
+    try:
+        with httpx.Client(headers=headers) as client:
+            response = client.post(
+                f"{settings.base_url}/chat/completions",
+                json=request_body,
+                timeout=remaining_timeout(),
+            )
+            ensure_supported_status(response, "chat completion")
+            response_payload = response_json(response, "chat completion")
+
+            if response.status_code == 202:
+                request_id = request_id_from(response_payload)
+                status_url = f"{settings.base_url}/status/{request_id}"
+                while True:
+                    sleep_seconds = min(
+                        settings.status_poll_interval_seconds,
+                        remaining_timeout(),
+                    )
+                    time.sleep(sleep_seconds)
+                    status_response = client.get(
+                        status_url,
+                        timeout=remaining_timeout(),
+                    )
+                    ensure_supported_status(status_response, "status polling")
+                    response_payload = response_json(
+                        status_response, "status polling"
+                    )
+                    if status_response.status_code == 200:
+                        break
+                    pending_id = request_id_from(response_payload)
+                    if pending_id != request_id:
+                        raise AnalysisPipelineError(
+                            "invalid_response",
+                            "NVIDIA status response changed requestId",
+                        )
+    except httpx.TimeoutException as exc:
         raise AnalysisPipelineError("timeout", str(exc)) from exc
-    except (APIConnectionError, RateLimitError, APIStatusError) as exc:
+    except httpx.RequestError as exc:
         raise AnalysisPipelineError("upstream_error", str(exc)) from exc
 
-    if not response.choices:
+    choices = response_payload.get("choices")
+    if not isinstance(choices, list) or not choices:
         raise AnalysisPipelineError(
             "invalid_response", "Kimi-K3 response did not contain a choice"
         )
-    content = response.choices[0].message.content
+    first_choice = choices[0]
+    message = first_choice.get("message") if isinstance(first_choice, Mapping) else None
+    content = message.get("content") if isinstance(message, Mapping) else None
     if not isinstance(content, str) or not content.strip():
         raise AnalysisPipelineError(
             "invalid_response", "Kimi-K3 response content was empty"
