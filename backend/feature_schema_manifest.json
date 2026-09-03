@@ -1,10 +1,10 @@
 {
-  "schema_version": "llm_feature_schema_manifest_v4",
+  "schema_version": "llm_feature_schema_manifest_v7",
   "feature_schema_version": "llm_features_v1",
   "feature_selection_schema_version": "llm_feature_selection_v1",
   "input_schema_versions": {
-    "behavioral": "llm_behavioral_input_v3",
-    "comparison": "llm_comparison_input_v5"
+    "behavioral": "llm_behavioral_input_v4",
+    "comparison": "llm_comparison_input_v8"
   },
   "policy": {
     "allowlist_only": true,
@@ -35,6 +35,16 @@
       "medium",
       "high"
     ],
+    "cross_context_calibration": {
+      "confidence_thresholds": {
+        "high_min": 0.75,
+        "medium_min": 0.45
+      },
+      "risk_adjustment": {
+        "aligned_gap_max_exclusive": 0.15,
+        "deterministic_gap_min_exclusive": 0.35
+      }
+    },
     "score_calculation": "arithmetic mean of Python-finalized ordinal values for the three core dimensions",
     "profile_bands": [
       {
@@ -702,7 +712,7 @@
     }
   },
   "behavioral_dimension_rubrics": {
-    "rubric_version": "behavioral_ordinal_rubric_v2",
+    "rubric_version": "behavioral_ordinal_rubric_v3",
     "calibration_status": "MVP heuristic cutoffs; retain version and recalibrate only after sufficient user data are collected",
     "shared_rules": {
       "evidence_requirement": "각 판단은 최소 하나 이상의 실제 JSON field path를 evidence_fields에 기록한다",
@@ -712,7 +722,7 @@
     },
     "dimensions": {
       "risk_engagement": {
-        "rubric_id": "risk_engagement_v2",
+        "rubric_id": "risk_engagement_v3",
         "primary_evidence": [
           "behavioral_analysis.episode3.adaptive_context.routing_score"
         ],

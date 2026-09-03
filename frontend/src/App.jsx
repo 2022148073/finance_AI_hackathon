@@ -7,24 +7,6 @@ const ANALYSIS_POLL_INTERVAL_MS = 1500;
 // calls may take several minutes, so keep a finite but sufficiently wide UI
 // deadline while the backend enforces a separate timeout per model call.
 const ANALYSIS_POLL_TIMEOUT_MS = 25 * 60 * 1000;
-const DIMENSION_LABELS = {
-  risk_engagement: "위험자산 참여 성향",
-  loss_resilience: "손실 대응 성향",
-  volatility_tolerance: "변동성 대응 성향",
-  information_sensitivity: "외부정보 민감도",
-};
-const LEVEL_LABELS = {
-  very_low: "매우 낮음",
-  low: "낮음",
-  medium: "보통",
-  high: "높음",
-  very_high: "매우 높음",
-};
-const CONFIDENCE_LABELS = {
-  low: "낮음",
-  medium: "보통",
-  high: "높음",
-};
 
 function getUserId() {
   const key = "experiment_user_id";
@@ -168,8 +150,6 @@ function AnalysisResult({ run, onRetry }) {
 
   const result = run.result;
   const analysis = result.analysis;
-  const confidenceLabel =
-    CONFIDENCE_LABELS[analysis.confidence_level] ?? "근거 부족";
   return (
     <main className="app-shell analysis-shell">
       <header className="page-header analysis-header">
@@ -189,19 +169,6 @@ function AnalysisResult({ run, onRetry }) {
           <span>행동 기반 성향</span>
           <strong>{result.revealed_profile ?? "분석 근거 부족"}</strong>
         </article>
-      </section>
-
-      <section className="analysis-card">
-        <p className="eyebrow">KEY BEHAVIOR</p>
-        <h2>핵심 행동 특성</h2>
-        <div className="trait-grid">
-          {Object.entries(result.behavioral_traits).map(([name, trait]) => (
-            <div className="trait-row" key={name}>
-              <span>{DIMENSION_LABELS[name] ?? name}</span>
-              <strong>{LEVEL_LABELS[trait.level] ?? "근거 부족"}</strong>
-            </div>
-          ))}
-        </div>
       </section>
 
       <section className="analysis-card">
@@ -230,7 +197,7 @@ function AnalysisResult({ run, onRetry }) {
       <section className="analysis-card final-analysis-card">
         <p className="eyebrow">FINAL INTERPRETATION</p>
         <h2>종합 해석</h2>
-        <p className="analysis-confidence">해석 신뢰도 {confidenceLabel}</p>
+        <p className="analysis-confidence">해석 신뢰도 {analysis.confidence}</p>
         <p className="analysis-description">{analysis.final_analysis}</p>
       </section>
     </main>

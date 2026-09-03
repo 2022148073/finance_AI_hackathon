@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -313,6 +314,7 @@ def _behavioral_response_schema(
     for name in dimensions:
         base_level = baselines[name]["base_level"]
         maximum = int(baselines[name]["max_llm_adjustment_steps"])
+        suggested_adjustment = baselines[name].get("suggested_adjustment")
         rubric = manifest["behavioral_dimension_rubrics"]["dimensions"][name]
         allowed_evidence = list(
             dict.fromkeys(
@@ -328,7 +330,11 @@ def _behavioral_response_schema(
                     "enum": (
                         [None]
                         if base_level is None
-                        else list(range(-maximum, maximum + 1))
+                        else (
+                            [suggested_adjustment]
+                            if suggested_adjustment is not None
+                            else list(range(-maximum, maximum + 1))
+                        )
                     )
                 },
                 "confidence_level": {
@@ -377,9 +383,17 @@ def _comparison_response_schema(
                 "additionalProperties": False,
             }
         if isinstance(value, list):
+            item_schema: dict[str, Any] = {"type": "string", "minLength": 1}
+            if name == "key_behavioral_evidence":
+                item_schema = {
+                    "type": "string",
+                    "enum": list(
+                        comparison_input["public_behavioral_observations"]
+                    ),
+                }
             return {
                 "type": "array",
-                "items": {"type": "string", "minLength": 1},
+                "items": item_schema,
                 **({"minItems": 1} if name == "key_behavioral_evidence" else {}),
             }
         if name == "investor_type":
@@ -424,6 +438,20 @@ def _validate_response_shape(
             raise AnalysisPipelineError(
                 "invalid_response", f"{path} must contain at least one field"
             )
+        if path.endswith("key_behavioral_evidence") and any(
+            re.search(r"[가-힣]", item) is None for item in value
+        ):
+            raise AnalysisPipelineError(
+                "invalid_response",
+                f"{path} must contain Korean user-facing strings",
+            )
+        return
+    if path.endswith("investor_type"):
+        if not isinstance(value, str) or value != template:
+            raise AnalysisPipelineError(
+                "invalid_response",
+                f"{path} must preserve the fixed Python investor type",
+            )
         return
     if path.endswith("confidence_level"):
         confidence_levels = set(
@@ -435,10 +463,6 @@ def _validate_response_shape(
                 f"{path} must match a manifest confidence level",
             )
         return
-    if isinstance(template, str) and value != template:
-        raise AnalysisPipelineError(
-            "invalid_response", f"{path} must preserve the fixed Python result"
-        )
     if not isinstance(value, str) or not value.strip():
         raise AnalysisPipelineError(
             "invalid_response", f"{path} must be a non-empty string"
@@ -450,6 +474,118 @@ def _behavioral_feature_guide(manifest: Mapping[str, Any]) -> dict[str, Any]:
     # Call 1 must not receive stated-preference values or even its feature guide.
     guide.pop("stated_preference", None)
     return guide
+
+
+def _comparison_llm_payload(
+    comparison_input: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Build Call 2 input without raw feature names, paths, or numeric scores."""
+    request = comparison_input["analysis_request"]
+    return {
+        "source_user_facing_results": {
+            "stated_profile": comparison_input["stated_preference"][
+                "survey_baseline"
+            ]["profile"],
+            "revealed_profile": comparison_input["revealed_profile"]["profile"],
+        },
+        "confidence_anchor": comparison_input["cross_context_calibration"][
+            "behavioral_confidence_base"
+        ],
+        "verified_behavioral_observations": comparison_input[
+            "public_behavioral_observations"
+        ],
+        "rules": request["rules"],
+        "required_output_format": request["required_output_format"],
+    }
+
+
+USER_FACING_INTERNAL_PATTERNS = (
+    re.compile(r"\b(?:very_low|very_high|low|medium|high)\b", re.IGNORECASE),
+    re.compile(r"\b(?:Episode|에피소드)\s*[1-6]?\b", re.IGNORECASE),
+    re.compile(r"\bE[1-6]\b", re.IGNORECASE),
+    re.compile(r"\b0\.\d+\b"),
+    re.compile(r"\b\d+(?:\.\d+)?\s*점\b"),
+    re.compile(r"[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+"),
+    re.compile(
+        r"\b(?:rubric|base\s*level|adjustment|Call\s*[12])\b",
+        re.IGNORECASE,
+    ),
+)
+DIRECT_ADVICE_PATTERNS = (
+    re.compile(r"(?:매수|매도|투자).*(?:추천(?:합니다|해요)|권(?:합니다|해요)|하세요)"),
+    re.compile(r"비중을\s*(?:늘리세요|줄이세요|조정하세요)"),
+)
+USER_FACING_SIMULATION_PATTERNS = (
+    re.compile(r"(?:실제|실전)\s*(?:투자|거래)"),
+)
+VERIFIABLE_ACTION_PATTERNS = {
+    "increase": re.compile(
+        r"(?:(?:비중|노출).{0,12}(?:높이|늘리|확대|증가)|"
+        r"(?:높이|늘리|확대|증가).{0,12}(?:비중|노출))"
+    ),
+    "decrease": re.compile(
+        r"(?:(?:비중|노출).{0,12}(?:낮추|줄이|축소|감소)|"
+        r"(?:낮추|줄이|축소|감소).{0,12}(?:비중|노출))"
+    ),
+    "hold": re.compile(r"유지"),
+    "reentry": re.compile(r"재진입|다시\s*(?:늘리|높이|확대)"),
+    "recovery": re.compile(r"회복"),
+}
+
+
+def _validate_user_facing_analysis(
+    value: Mapping[str, Any], verified_observations: list[str]
+) -> None:
+    text_fields = (
+        "stated_preference_summary",
+        "revealed_preference_summary",
+        "stated_revealed_gap",
+        "final_analysis",
+    )
+    texts = [str(value[field]) for field in text_fields]
+    texts.extend(str(item) for item in value["key_behavioral_evidence"])
+    if sum(text.count("사용자님") for text in texts) > 1:
+        raise AnalysisPipelineError(
+            "invalid_response",
+            "Kimi-K3 user-facing output repeated 사용자님 unnecessarily",
+        )
+    if value.get("confidence_level") in {"low", "medium"} and any(
+        re.search(r"(?:일관된|명확한|확실한)", text) for text in texts
+    ):
+        raise AnalysisPipelineError(
+            "invalid_response",
+            "Kimi-K3 user-facing wording was too strong for the confidence level",
+        )
+    verified_text = " ".join(verified_observations)
+    for text in texts:
+        if any(pattern.search(text) for pattern in USER_FACING_INTERNAL_PATTERNS):
+            raise AnalysisPipelineError(
+                "invalid_response",
+                "Kimi-K3 user-facing output exposed internal analysis metadata",
+            )
+        if any(pattern.search(text) for pattern in DIRECT_ADVICE_PATTERNS):
+            raise AnalysisPipelineError(
+                "invalid_response",
+                "Kimi-K3 user-facing output contained direct investment advice",
+            )
+        if any(pattern.search(text) for pattern in USER_FACING_SIMULATION_PATTERNS):
+            raise AnalysisPipelineError(
+                "invalid_response",
+                "Kimi-K3 user-facing output described simulated choices as real trading",
+            )
+        if re.search(r"[가-힣]", text) is None or re.search(
+            r"요[.!?]?\s*$", text
+        ) is None:
+            raise AnalysisPipelineError(
+                "invalid_response",
+                "Kimi-K3 user-facing prose must use natural Korean 해요체",
+            )
+        for concept, pattern in VERIFIABLE_ACTION_PATTERNS.items():
+            if pattern.search(text) and not pattern.search(verified_text):
+                raise AnalysisPipelineError(
+                    "invalid_response",
+                    f"Kimi-K3 invented an unverified behavioral action: {concept}",
+                )
 
 
 def _call_structured(
@@ -634,24 +770,21 @@ def _public_result(
     manifest: Mapping[str, Any],
 ) -> dict[str, Any]:
     revealed_profile = comparison_input["revealed_profile"]
-    dimensions = {
-        **comparison_input["behavioral_evidence"],
-        **{
-            name: comparison_input["behavioral_modifiers"][name]
-            for name in manifest["revealed_profile_scoring"]["modifier_dimensions"]
-        },
+    confidence_labels = {"low": "낮음", "medium": "보통", "high": "높음"}
+    public_analysis = {
+        key: value
+        for key, value in comparison_result.items()
+        if key != "confidence_level"
     }
+    public_analysis["confidence"] = confidence_labels[
+        comparison_result["confidence_level"]
+    ]
     return {
         "stated_profile": comparison_input["stated_preference"][
             "survey_baseline"
         ]["profile"],
         "revealed_profile": revealed_profile["profile"],
-        "classification_status": revealed_profile["classification_status"],
-        "behavioral_traits": {
-            name: {"level": value["final_level"]}
-            for name, value in dimensions.items()
-        },
-        "analysis": dict(comparison_result),
+        "analysis": public_analysis,
     }
 
 
@@ -695,7 +828,10 @@ def execute_analysis_run(
                 "You analyze investment behavior using only the supplied behavioral "
                 "evidence and versioned rubric. Never infer or request stated survey "
                 "answers. Preserve Python base levels and apply only the allowed "
-                "adjustment. Return only schema-valid JSON."
+                "adjustment. A non-null suggested_adjustment is a mandatory Python "
+                "calibration result and must be echoed exactly. Information "
+                "sensitivity is direction-neutral and may never raise or lower any "
+                "risk-profile dimension. Return only schema-valid JSON."
             ),
             payload=call1_payload,
         )
@@ -720,10 +856,7 @@ def execute_analysis_run(
             finalized_revealed,
         )
 
-        call2_payload = {
-            "feature_guide": build_feature_guide(manifest),
-            "comparison_input": comparison_input,
-        }
+        call2_payload = _comparison_llm_payload(comparison_input)
         _update_artifact(
             database_path,
             analysis_id,
@@ -736,16 +869,34 @@ def execute_analysis_run(
             schema_name="stated_revealed_interpretation",
             schema=_comparison_response_schema(comparison_input, manifest),
             system_prompt=(
-                "You write a Korean user-facing interpretation of fixed stated and "
-                "revealed results. The revealed profile is immutable: never change, "
-                "recalculate, or replace it. Do not expose raw feature names, field "
-                "paths, quantitative cutoffs, base levels, or adjustment mechanics in "
-                "any user-facing output field, including key_behavioral_evidence and "
-                "summaries. investor_type must exactly echo the fixed revealed profile "
-                "provided in the required output format. "
-                "Treat survey and revealed numeric scores as different, non-calibrated "
-                "scales. Write every user-facing prose field in Korean. Return only "
-                "schema-valid JSON."
+                "Write a respectful Korean user-facing interpretation using only the "
+                "verified Korean observations supplied in this request. Every prose "
+                "field and every evidence item must be a non-empty natural Korean "
+                "해요체 sentence ending in -요. Never use -습니다/-입니다 style or "
+                "plain -다/-한다 style. Avoid repeating 사용자님 and omit the subject "
+                "naturally whenever possible. This is a simulated market-choice "
+                "assessment, so never describe it as 실제 투자, 실제 거래, or 실전 투자. "
+                "investor_type is the only fixed output field and must exactly match "
+                "the Python result. Choose confidence_level only from the allowed "
+                "manifest enum and use confidence_anchor as the primary calibration "
+                "evidence. Matching stated and revealed profile labels never proves "
+                "behavioral consistency; infer consistency only from cross-context "
+                "calibration and verified observations. For high confidence, wording "
+                "may indicate a comparatively clear or similar tendency across "
+                "situations. For medium confidence, mention observed differences and "
+                "avoid strong claims such as 일관된, 명확한, or 확실한. For low "
+                "confidence, state that the evidence is limited or varies by context "
+                "and requires cautious interpretation. Never expose English ordinal "
+                "levels, decimal "
+                "values, point scores, experiment or episode names, feature names, "
+                "JSON paths, rubrics, base levels, cutoffs, or adjustment mechanics. "
+                "Do not invent an allocation increase, decrease, hold, re-entry, or "
+                "recovery action that is absent from verified_behavioral_observations. "
+                "Information responsiveness describes only reaction magnitude and "
+                "must never be interpreted as aggressive or conservative direction. "
+                "Cross-market conflict controls confidence only. Never recommend a "
+                "product, allocation, purchase, sale, or investment strategy. Return "
+                "only schema-valid JSON."
             ),
             payload=call2_payload,
         )
@@ -756,6 +907,10 @@ def execute_analysis_run(
         )
         _update_artifact(
             database_path, analysis_id, "call2_raw_response_json", call2_result
+        )
+        _validate_user_facing_analysis(
+            call2_result,
+            comparison_input["public_behavioral_observations"],
         )
         public_result = _public_result(comparison_input, call2_result, manifest)
         _update_artifact(

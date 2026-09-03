@@ -725,6 +725,146 @@ def calculate_quantitative_baselines(
     return baselines
 
 
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _confidence_level_from_consistency(
+    consistency: float | None, manifest: Mapping[str, Any]
+) -> str:
+    if consistency is None:
+        return "low"
+    thresholds = manifest["revealed_profile_scoring"][
+        "cross_context_calibration"
+    ]["confidence_thresholds"]
+    if consistency >= float(thresholds["high_min"]):
+        return "high"
+    if consistency >= float(thresholds["medium_min"]):
+        return "medium"
+    return "low"
+
+
+def _gap_direction(
+    earlier: float, anchor: float, gap: float, manifest: Mapping[str, Any]
+) -> str:
+    rules = manifest["revealed_profile_scoring"]["cross_context_calibration"][
+        "risk_adjustment"
+    ]
+    aligned_max = float(rules["aligned_gap_max_exclusive"])
+    strong_min = float(rules["deterministic_gap_min_exclusive"])
+    if gap < aligned_max:
+        return "aligned"
+    if anchor < earlier:
+        return "strongly_lower" if gap > strong_min else "lower"
+    return "strongly_higher" if gap > strong_min else "higher"
+
+
+def calculate_cross_context_calibration(
+    behavioral_analysis: Mapping[str, Any], manifest: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Calculate private E6 gaps and deterministic confidence/adjustment anchors."""
+    episode3 = behavioral_analysis["episode3"]
+    episode6 = behavioral_analysis["episode6"]
+    e3_summary = episode3["summary_features"]
+    e6_summary = episode6["summary_features"]
+
+    pre_e6_risk = _optional_float(
+        episode3["adaptive_context"].get("routing_score")
+    )
+    e6_risk = _optional_float(e6_summary.get("anchor_risk_exposure_auc"))
+    risk_consistency = _optional_float(
+        e6_summary.get("risk_engagement_consistency")
+    )
+    pre_e6_loss = _optional_float(
+        e3_summary.get("behavior_resilience_score")
+    )
+    e6_loss = _optional_float(
+        e6_summary.get("e6_behavior_resilience_score")
+    )
+    loss_consistency = _optional_float(
+        e6_summary.get("loss_response_consistency")
+    )
+    cross_context = _optional_float(
+        e6_summary.get("cross_context_consistency")
+    )
+
+    def gap_payload(
+        earlier: float | None,
+        anchor: float | None,
+        consistency: float | None,
+        *,
+        with_adjustment: bool,
+    ) -> dict[str, Any]:
+        if earlier is None or anchor is None:
+            return {
+                "pre_e6_value": earlier,
+                "e6_value": anchor,
+                "gap": None,
+                "direction": "insufficient_evidence",
+                "consistency_value": consistency,
+                "consistency_level": _confidence_level_from_consistency(
+                    consistency, manifest
+                ),
+                "suggested_adjustment": None,
+            }
+        gap = abs(earlier - anchor)
+        direction = _gap_direction(earlier, anchor, gap, manifest)
+        suggestion: int | None = None
+        if with_adjustment:
+            rules = manifest["revealed_profile_scoring"][
+                "cross_context_calibration"
+            ]["risk_adjustment"]
+            aligned_max = float(rules["aligned_gap_max_exclusive"])
+            strong_min = float(rules["deterministic_gap_min_exclusive"])
+            if gap < aligned_max:
+                suggestion = 0
+            elif gap > strong_min:
+                suggestion = -1 if anchor < earlier else 1
+        return {
+            "pre_e6_value": round(earlier, 8),
+            "e6_value": round(anchor, 8),
+            "gap": round(gap, 8),
+            "direction": direction,
+            "consistency_value": consistency,
+            "consistency_level": _confidence_level_from_consistency(
+                consistency, manifest
+            ),
+            "suggested_adjustment": suggestion,
+        }
+
+    return {
+        "risk_engagement": gap_payload(
+            pre_e6_risk, e6_risk, risk_consistency, with_adjustment=True
+        ),
+        "loss_resilience": gap_payload(
+            pre_e6_loss, e6_loss, loss_consistency, with_adjustment=False
+        ),
+        "cross_context_consistency": cross_context,
+        "behavioral_confidence_base": _confidence_level_from_consistency(
+            cross_context, manifest
+        ),
+    }
+
+
+def _apply_calibration_to_baselines(
+    quantitative_baselines: dict[str, dict[str, Any]],
+    calibration: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> None:
+    suggestion = calibration["risk_engagement"]["suggested_adjustment"]
+    base_level = quantitative_baselines["risk_engagement"]["base_level"]
+    if suggestion is not None and base_level is not None:
+        ordered = list(manifest["revealed_profile_scoring"]["ordinal_values"])
+        base_index = ordered.index(base_level)
+        if base_index + suggestion < 0 or base_index + suggestion >= len(ordered):
+            suggestion = 0
+    quantitative_baselines["risk_engagement"][
+        "suggested_adjustment"
+    ] = suggestion
+
+
 def _dimension_output_template(base_level: str | None) -> dict[str, Any]:
     return {
         "base_level": base_level,
@@ -765,11 +905,13 @@ def _behavioral_request(
             "Echo each immutable base_level exactly as supplied.",
             "Return only an integer adjustment within the rubric's allowed step range.",
             "Use supporting evidence and raw behavior only to justify -1, 0, or +1 relative to the Python base level.",
+            "For risk_engagement, when suggested_adjustment is not null, echo that exact Python adjustment; only the middle conflict band remains an LLM judgment.",
             "Apply the matching pre-defined rubric; do not invent different thresholds.",
             "Ground each reason in named evidence_fields.",
             "Do not treat composite features and their components as independent evidence.",
             "Do not create final levels, a revealed profile, or a numerical risk score; Python calculates them.",
             "Information sensitivity is descriptive and is not a conservative/aggressive direction.",
+            "Never use information sensitivity to raise or lower risk_engagement, loss_resilience, volatility_tolerance, the risk score, or the investor profile.",
             "Cross-context consistency is a confidence modifier and never changes risk direction.",
             "Use null rather than zero when evidence is insufficient.",
             "When a Python base_level is null, return null for base_level, adjustment, and confidence_level and explain the missing evidence.",
@@ -845,6 +987,11 @@ def _extract_dimension_result(
                 raise LlmInputBuildError(
                     f"{name} adjustment must be an integer between "
                     f"{-maximum} and {maximum}"
+                )
+            suggested = quantitative_baselines[name].get("suggested_adjustment")
+            if suggested is not None and adjustment != suggested:
+                raise LlmInputBuildError(
+                    f"{name} adjustment must match Python calibration: {suggested}"
                 )
             final_index = ordered_levels.index(base_level) + adjustment
             if final_index < 0 or final_index >= len(ordered_levels):
@@ -971,8 +1118,78 @@ def calculate_revealed_profile(
     )
 
 
+def _public_behavioral_observations(
+    dimensions: Mapping[str, Mapping[str, Any]],
+    calibration: Mapping[str, Any],
+) -> list[str]:
+    dimension_phrases = {
+        "risk_engagement": {
+            "very_low": "여러 시장 상황에서 위험자산 참여를 매우 제한적으로 유지했어요.",
+            "low": "여러 시장 상황에서 위험자산 참여를 비교적 낮게 유지했어요.",
+            "medium": "여러 시장 상황에서 위험자산에 중간 수준으로 참여했어요.",
+            "high": "초기 시장 상황에서 비교적 높은 위험자산 비중을 유지했어요.",
+            "very_high": "여러 시장 상황에서 매우 높은 위험자산 비중을 지속했어요.",
+        },
+        "loss_resilience": {
+            "very_low": "손실 상황에서 위험 노출을 유지하려는 정도가 매우 낮게 관찰됐어요.",
+            "low": "손실 상황에서 위험 노출을 비교적 낮게 유지했어요.",
+            "medium": "손실 상황에서 위험 노출을 일부 유지하면서 신중하게 조정했어요.",
+            "high": "손실 상황에서도 위험 노출을 비교적 많이 유지했어요.",
+            "very_high": "손실 상황에서도 위험 노출을 매우 강하게 유지했어요.",
+        },
+        "volatility_tolerance": {
+            "very_low": "가격 변동이 커진 상황에서 위험자산 노출을 매우 낮게 유지했어요.",
+            "low": "가격 변동이 커진 상황에서 위험자산 노출을 비교적 낮게 유지했어요.",
+            "medium": "가격 변동이 커진 상황에서 중간 수준의 위험자산 노출을 유지했어요.",
+            "high": "가격 변동이 커진 상황에서도 비교적 높은 위험자산 노출을 유지했어요.",
+            "very_high": "가격 변동이 커진 상황에서도 매우 높은 위험자산 노출을 유지했어요.",
+        },
+        "information_sensitivity": {
+            "very_low": "상충된 외부 정보가 제시된 뒤에도 기존 선택을 거의 그대로 유지했어요.",
+            "low": "상충된 외부 정보가 제시된 뒤 위험자산 비중을 소폭 조정했어요.",
+            "medium": "상충된 외부 정보가 제시된 뒤 위험자산 비중을 중간 정도로 조정했어요.",
+            "high": "상충된 외부 정보가 제시된 뒤 위험자산 비중을 비교적 크게 조정했어요.",
+            "very_high": "상충된 외부 정보가 제시된 뒤 위험자산 비중을 매우 크게 조정했어요.",
+        },
+    }
+    observations: list[str] = []
+    for name, phrases in dimension_phrases.items():
+        level = dimensions[name]["final_level"]
+        if level in phrases:
+            observations.append(phrases[level])
+
+    risk_direction = calibration["risk_engagement"]["direction"]
+    risk_phrases = {
+        "aligned": "공통 시장 조건에서도 앞서 관찰된 위험자산 참여 수준과 대체로 비슷한 행동을 보였어요.",
+        "lower": "공통 시장 조건에서는 앞선 상황보다 위험자산 노출을 다소 낮췄어요.",
+        "strongly_lower": "공통 시장 조건에서는 앞선 상황보다 위험자산 노출을 뚜렷하게 낮췄어요.",
+        "higher": "공통 시장 조건에서는 앞선 상황보다 위험자산 노출을 다소 높였어요.",
+        "strongly_higher": "공통 시장 조건에서는 앞선 상황보다 위험자산 노출을 뚜렷하게 높였어요.",
+    }
+    if risk_direction in risk_phrases:
+        observations.append(risk_phrases[risk_direction])
+
+    loss_direction = calibration["loss_resilience"]["direction"]
+    loss_phrases = {
+        "aligned": "공통 시장 조건에서도 앞서 관찰된 손실 대응과 대체로 비슷한 행동을 보였어요.",
+        "lower": "공통 시장 조건에서는 앞선 손실 상황보다 위험 노출을 유지하는 정도가 다소 낮았어요.",
+        "strongly_lower": "공통 시장 조건에서는 앞선 손실 상황보다 위험 노출을 유지하는 정도가 뚜렷하게 낮았어요.",
+        "higher": "공통 시장 조건에서는 앞선 손실 상황보다 위험 노출을 유지하는 정도가 다소 높았어요.",
+        "strongly_higher": "공통 시장 조건에서는 앞선 손실 상황보다 위험 노출을 유지하는 정도가 뚜렷하게 높았어요.",
+    }
+    if loss_direction in loss_phrases:
+        observations.append(loss_phrases[loss_direction])
+
+    observations.append(
+        "외부 정보에 대한 반응 크기는 공격적 또는 보수적 투자 방향을 뜻하지 않아요."
+    )
+    return observations
+
+
 def _comparison_request(
-    manifest: Mapping[str, Any], revealed_profile: Mapping[str, Any]
+    manifest: Mapping[str, Any],
+    revealed_profile: Mapping[str, Any],
+    confidence_level: str,
 ) -> dict[str, Any]:
     scoring = manifest["revealed_profile_scoring"]
     investor_type = revealed_profile["profile"] or "분석 근거 부족"
@@ -997,18 +1214,36 @@ def _comparison_request(
             "Cross-context consistency affects confidence/representativeness, not risk direction.",
             "Do not interpret the numeric difference between stated survey score and revealed risk score as a calibrated cardinal distance; compare profiles/categories and behavioral evidence instead.",
             "Explain stated-revealed agreement or gaps using the supplied fixed evidence.",
+            "Write every user-facing explanation in natural Korean 해요체; do not use -습니다/-입니다 style or plain -다/-한다 style.",
+            "Avoid repeating '사용자님'; omit the subject naturally whenever possible.",
+            "This service measures choices in a market simulation, not real brokerage trading. Do not say 실제 투자, 실제 거래, or 실전 투자; use 행동 분석, 시장 선택 과정, or 시뮬레이션에서의 선택 instead.",
+            "Matching stated and revealed profile labels does not prove behavioral consistency. Describe consistency only from cross-context calibration and verified behavioral evidence.",
+            "Use confidence_level only to control wording strength: high may use 비교적 뚜렷하게 or 여러 상황에서 비슷한 경향; medium should use 전반적으로 or 일부 차이가 관찰됐어요 and avoid 일관된, 명확한, 확실한; low should use 제한된 근거에서는 or 상황에 따른 차이가 커 조심스럽게 해석할 필요가 있어요.",
+            "Do not mention experiment names, episode numbers, internal feature names, JSON paths, rubrics, levels, scores, cutoffs, or adjustments.",
+            "Do not claim an increase, decrease, hold, re-entry, or other action unless it appears explicitly in verified_behavioral_observations.",
+            "Information responsiveness has no aggressive or conservative direction and must only be described as response magnitude.",
+            "Choose confidence_level only from the manifest confidence enum and use the Python cross-context confidence anchor as calibration evidence.",
+            "Do not recommend any investment product, allocation, purchase, sale, or investment strategy.",
             "Return JSON only.",
         ],
         "ordinal_levels": list(scoring["ordinal_values"]),
         "confidence_levels": list(scoring["confidence_levels"]),
         "required_output_format": {
             "investor_type": investor_type,
-            "confidence_level": None,
-            "stated_preference_summary": None,
-            "revealed_preference_summary": None,
-            "stated_revealed_gap": None,
+            "confidence_level": confidence_level,
+            "stated_preference_summary": (
+                "설문에서 확인된 성향을 자연스러운 한국어 해요체로 요약해요."
+            ),
+            "revealed_preference_summary": (
+                "시뮬레이션의 시장 선택 과정에서 관찰된 성향을 자연스러운 한국어 해요체로 요약해요."
+            ),
+            "stated_revealed_gap": (
+                "설문 응답과 시장 선택 과정의 일치점 또는 차이를 자연스러운 한국어 해요체로 설명해요."
+            ),
             "key_behavioral_evidence": [],
-            "final_analysis": None,
+            "final_analysis": (
+                "검증된 행동 근거만 사용해 시장 선택 과정의 행동 특성을 자연스러운 한국어 해요체로 설명해요."
+            ),
         },
     }
 
@@ -1041,10 +1276,15 @@ def build_behavioral_input(
     quantitative_baselines = calculate_quantitative_baselines(
         behavioral, manifest
     )
+    calibration = calculate_cross_context_calibration(behavioral, manifest)
+    _apply_calibration_to_baselines(
+        quantitative_baselines, calibration, manifest
+    )
     return {
         **_schema_references(manifest, "behavioral"),
         "behavioral_analysis": behavioral,
         "quantitative_baselines": quantitative_baselines,
+        "cross_context_calibration": calibration,
         "analysis_request": _behavioral_request(
             manifest, quantitative_baselines
         ),
@@ -1067,6 +1307,10 @@ def build_comparison_input(
     quantitative_baselines = calculate_quantitative_baselines(
         behavioral, manifest
     )
+    calibration = calculate_cross_context_calibration(behavioral, manifest)
+    _apply_calibration_to_baselines(
+        quantitative_baselines, calibration, manifest
+    )
     revealed_profile, dimensions = calculate_revealed_profile(
         revealed_result, manifest, quantitative_baselines, behavioral
     )
@@ -1086,7 +1330,15 @@ def build_comparison_input(
             for name in manifest["revealed_profile_scoring"]["core_dimensions"]
         },
         "behavioral_modifiers": modifiers,
-        "analysis_request": _comparison_request(manifest, revealed_profile),
+        "cross_context_calibration": calibration,
+        "public_behavioral_observations": _public_behavioral_observations(
+            dimensions, calibration
+        ),
+        "analysis_request": _comparison_request(
+            manifest,
+            revealed_profile,
+            calibration["behavioral_confidence_base"],
+        ),
     }
 
 

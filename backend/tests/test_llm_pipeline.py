@@ -19,15 +19,19 @@ if str(BACKEND_DIR) not in sys.path:
 from build_llm_input import (  # noqa: E402
     LlmInputBuildError,
     _extract_dimension_result,
+    calculate_cross_context_calibration,
     load_feature_manifest,
 )
 from database import connect, initialize_database  # noqa: E402
 from llm_pipeline import (  # noqa: E402
     AnalysisPipelineError,
     _call_structured,
+    _comparison_llm_payload,
     _comparison_response_schema,
+    _public_result,
     _runtime_settings,
     _update_artifact,
+    _validate_user_facing_analysis,
     _validate_response_shape,
     create_or_restore_analysis_run,
 )
@@ -305,18 +309,185 @@ class LlmPipelineTargetedTests(unittest.TestCase):
         with self.assertRaisesRegex(LlmInputBuildError, "actual input"):
             _extract_dimension_result(result, self.manifest, baselines, behavioral)
 
+    def test_large_e6_risk_gap_fixes_downward_adjustment_and_low_confidence(self) -> None:
+        behavioral = {
+            "episode3": {
+                "adaptive_context": {"routing_score": 0.70},
+                "summary_features": {"behavior_resilience_score": 0.80},
+            },
+            "episode6": {
+                "summary_features": {
+                    "anchor_risk_exposure_auc": 0.10,
+                    "risk_engagement_consistency": 0.40,
+                    "e6_behavior_resilience_score": 0.20,
+                    "loss_response_consistency": 0.40,
+                    "cross_context_consistency": 0.40,
+                }
+            },
+        }
+        calibration = calculate_cross_context_calibration(
+            behavioral, self.manifest
+        )
+        risk = calibration["risk_engagement"]
+        loss = calibration["loss_resilience"]
+        self.assertAlmostEqual(risk["gap"], 0.60)
+        self.assertEqual(risk["direction"], "strongly_lower")
+        self.assertEqual(risk["suggested_adjustment"], -1)
+        self.assertAlmostEqual(loss["gap"], 0.60)
+        self.assertEqual(loss["direction"], "strongly_lower")
+        self.assertEqual(calibration["behavioral_confidence_base"], "low")
+
+    def test_python_suggested_adjustment_cannot_be_overridden(self) -> None:
+        rubrics = self.manifest["behavioral_dimension_rubrics"]["dimensions"]
+        baselines = {
+            name: {"base_level": "medium", "max_llm_adjustment_steps": 1}
+            for name in rubrics
+        }
+        baselines["risk_engagement"]["suggested_adjustment"] = -1
+        behavioral: dict[str, object] = {}
+        for rubric in rubrics.values():
+            path = str(rubric["primary_evidence"][0]).split(".")[1:]
+            cursor = behavioral
+            for segment in path[:-1]:
+                cursor = cursor.setdefault(segment, {})  # type: ignore[assignment]
+            cursor[path[-1]] = 0.5
+        dimensions = {
+            name: {
+                "base_level": "medium",
+                "adjustment": 0,
+                "confidence_level": "medium",
+                "reason": "test",
+                "evidence_fields": [rubric["primary_evidence"][0]],
+            }
+            for name, rubric in rubrics.items()
+        }
+        with self.assertRaisesRegex(LlmInputBuildError, "Python calibration"):
+            _extract_dimension_result(
+                {"revealed_behavioral_dimensions": dimensions},
+                self.manifest,
+                baselines,
+                behavioral,
+            )
+
+    def test_call2_payload_and_public_result_exclude_internal_analysis(self) -> None:
+        template = {
+            "investor_type": "위험중립형",
+            "confidence_level": "low",
+            "stated_preference_summary": "설문 응답 성향을 해요체로 요약해요.",
+            "revealed_preference_summary": "시장 선택 성향을 해요체로 요약해요.",
+            "stated_revealed_gap": "설문과 시장 선택의 차이를 해요체로 설명해요.",
+            "key_behavioral_evidence": [],
+            "final_analysis": "검증된 근거로 행동 특성을 종합 설명해요.",
+        }
+        comparison_input = {
+            "stated_preference": {
+                "survey_baseline": {"score": 90, "profile": "공격투자형"}
+            },
+            "revealed_profile": {
+                "profile": "위험중립형",
+                "classification_status": "classified",
+                "core_dimension_values": {"risk_engagement": 30},
+            },
+            "cross_context_calibration": {
+                "behavioral_confidence_base": "low",
+                "risk_engagement": {"gap": 0.60},
+            },
+            "public_behavioral_observations": [
+                "공통 시장 조건에서는 위험자산 노출을 낮췄어요."
+            ],
+            "analysis_request": {
+                "rules": ["존댓말을 사용합니다."],
+                "required_output_format": template,
+            },
+        }
+        payload = _comparison_llm_payload(comparison_input)
+        serialized = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn("survey_baseline", serialized)
+        self.assertNotIn("core_dimension_values", serialized)
+        self.assertNotIn("risk_engagement", serialized)
+        self.assertNotIn("0.6", serialized)
+
+        raw_result = {
+            "investor_type": "위험중립형",
+            "confidence_level": "low",
+            "stated_preference_summary": "설문 결과에서는 공격투자형으로 나타났어요.",
+            "revealed_preference_summary": "행동에서는 위험자산 노출을 낮췄어요.",
+            "stated_revealed_gap": "설문과 행동 사이에 차이가 관찰됐어요.",
+            "key_behavioral_evidence": [
+                "공통 시장 조건에서는 위험자산 노출을 낮췄어요."
+            ],
+            "final_analysis": "행동 성향은 시장 조건에 따라 달라졌어요.",
+        }
+        public = _public_result(
+            comparison_input, raw_result, self.manifest
+        )
+        self.assertNotIn("classification_status", public)
+        self.assertNotIn("behavioral_traits", public)
+        self.assertNotIn("confidence_level", public["analysis"])
+        self.assertEqual(public["analysis"]["confidence"], "낮음")
+
+    def test_user_facing_output_rejects_internal_or_unverified_claims(self) -> None:
+        verified = ["위험자산 노출을 낮췄어요."]
+        valid = {
+            "stated_preference_summary": "설문 응답에서 나타난 성향을 요약했어요.",
+            "revealed_preference_summary": "위험자산 노출을 낮췄어요.",
+            "stated_revealed_gap": "설문과 행동 사이에 차이가 관찰됐어요.",
+            "key_behavioral_evidence": ["위험자산 노출을 낮췄어요."],
+            "final_analysis": "시장 조건에 따른 차이를 함께 고려해야 해요.",
+        }
+        _validate_user_facing_analysis(valid, verified)
+
+        leaked = dict(valid)
+        leaked["final_analysis"] = (
+            "behavioral_analysis.episode3.adaptive_context.routing_score는 0.3278이에요."
+        )
+        with self.assertRaisesRegex(AnalysisPipelineError, "internal"):
+            _validate_user_facing_analysis(leaked, verified)
+
+        invented = dict(valid)
+        invented["final_analysis"] = "회복 구간에서 다시 재진입했어요."
+        with self.assertRaisesRegex(AnalysisPipelineError, "unverified"):
+            _validate_user_facing_analysis(invented, verified)
+
+        advice = dict(valid)
+        advice["final_analysis"] = "위험자산을 매수하세요."
+        with self.assertRaisesRegex(AnalysisPipelineError, "advice"):
+            _validate_user_facing_analysis(advice, verified)
+
+        formal = dict(valid)
+        formal["final_analysis"] = "시장 조건에 따른 차이를 고려해야 합니다."
+        with self.assertRaisesRegex(AnalysisPipelineError, "해요체"):
+            _validate_user_facing_analysis(formal, verified)
+
+        real_trading = dict(valid)
+        real_trading["final_analysis"] = "실제 투자에서 보인 선택으로 해석해요."
+        with self.assertRaisesRegex(AnalysisPipelineError, "real trading"):
+            _validate_user_facing_analysis(real_trading, verified)
+
+        repeated_subject = dict(valid)
+        repeated_subject["stated_preference_summary"] = "사용자님의 설문 성향을 요약했어요."
+        repeated_subject["final_analysis"] = "사용자님의 행동을 함께 해석했어요."
+        with self.assertRaisesRegex(AnalysisPipelineError, "repeated"):
+            _validate_user_facing_analysis(repeated_subject, verified)
+
+        overconfident = {**valid, "confidence_level": "medium"}
+        overconfident["final_analysis"] = "명확한 행동 성향이 관찰됐어요."
+        with self.assertRaisesRegex(AnalysisPipelineError, "too strong"):
+            _validate_user_facing_analysis(overconfident, verified)
+
     def test_comparison_confidence_is_manifest_ordinal(self) -> None:
         template = {
             "investor_type": "위험중립형",
-            "confidence_level": None,
-            "stated_preference_summary": None,
-            "revealed_preference_summary": None,
-            "stated_revealed_gap": None,
+            "confidence_level": "high",
+            "stated_preference_summary": "설문 응답 성향을 해요체로 요약해요.",
+            "revealed_preference_summary": "시장 선택 성향을 해요체로 요약해요.",
+            "stated_revealed_gap": "설문과 시장 선택의 차이를 해요체로 설명해요.",
             "key_behavioral_evidence": [],
-            "final_analysis": None,
+            "final_analysis": "검증된 근거로 행동 특성을 종합 설명해요.",
         }
         comparison_input = {
-            "analysis_request": {"required_output_format": template}
+            "analysis_request": {"required_output_format": template},
+            "public_behavioral_observations": ["위험자산 노출을 유지했어요."],
         }
         schema = _comparison_response_schema(comparison_input, self.manifest)
         self.assertEqual(
@@ -325,16 +496,34 @@ class LlmPipelineTargetedTests(unittest.TestCase):
         )
         response = {
             **template,
-            "confidence_level": "high",
-            "stated_preference_summary": "설문 요약",
-            "revealed_preference_summary": "행동 요약",
-            "stated_revealed_gap": "차이",
-            "key_behavioral_evidence": ["행동 근거"],
-            "final_analysis": "종합 해석",
+            "confidence_level": "medium",
+            "stated_preference_summary": "설문에서 확인된 성향을 요약했어요.",
+            "revealed_preference_summary": "시장 선택에서 나타난 성향을 요약했어요.",
+            "stated_revealed_gap": "설문과 시장 선택 사이에 차이가 관찰됐어요.",
+            "key_behavioral_evidence": ["위험자산 노출을 유지했어요."],
+            "final_analysis": "검증된 행동을 바탕으로 종합적으로 해석했어요.",
         }
         _validate_response_shape(response, template, self.manifest)
         response["confidence_level"] = "very_high"
         with self.assertRaisesRegex(AnalysisPipelineError, "confidence"):
+            _validate_response_shape(response, template, self.manifest)
+
+    def test_call2_null_prose_is_rejected(self) -> None:
+        template = {
+            "investor_type": "위험중립형",
+            "confidence_level": "medium",
+            "stated_preference_summary": "설문 응답 성향을 해요체로 요약해요.",
+            "revealed_preference_summary": "시장 선택 성향을 해요체로 요약해요.",
+            "stated_revealed_gap": "설문과 시장 선택의 차이를 해요체로 설명해요.",
+            "key_behavioral_evidence": [],
+            "final_analysis": "검증된 근거로 행동 특성을 종합 설명해요.",
+        }
+        response = {
+            **template,
+            "stated_preference_summary": None,
+            "key_behavioral_evidence": ["위험자산 노출을 유지했어요."],
+        }
+        with self.assertRaisesRegex(AnalysisPipelineError, "non-empty string"):
             _validate_response_shape(response, template, self.manifest)
 
 
