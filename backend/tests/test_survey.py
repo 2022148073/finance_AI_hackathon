@@ -22,6 +22,7 @@ from survey import (
     calculate_survey_score,
     classify_survey_profile,
 )
+from test_support import TEST_ACCESS_CODE, authorize_access
 
 
 def conservative_answers() -> dict[str, str | list[str]]:
@@ -116,9 +117,11 @@ class SurveyApiTests(unittest.TestCase):
             database_path=self.database_path,
             scenario_dir=BACKEND_DIR / "scenarios",
             scenario_picker=lambda candidates: candidates[0],
+            access_code=TEST_ACCESS_CODE,
         )
         self.client_context = TestClient(app)
         self.client = self.client_context.__enter__()
+        authorize_access(self.client)
 
     def tearDown(self) -> None:
         self.client_context.__exit__(None, None, None)

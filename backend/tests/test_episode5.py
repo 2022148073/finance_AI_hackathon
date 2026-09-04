@@ -20,7 +20,7 @@ from database import connect
 from main import create_app
 from scenario_store import load_scenarios
 from stimulus_store import POLARITY_CYCLES, SOURCE_PAIRS
-from test_support import complete_survey
+from test_support import TEST_ACCESS_CODE, authorize_access, complete_survey
 
 
 class Episode5ApiTests(unittest.TestCase):
@@ -34,9 +34,11 @@ class Episode5ApiTests(unittest.TestCase):
             stimulus_dir=BACKEND_DIR / "scenarios" / "episode5" / "stimuli",
             scenario_picker=lambda candidates: candidates[0],
             e5_randomizer=random.Random(20260831),
+            access_code=TEST_ACCESS_CODE,
         )
         self.client_context = TestClient(self.app)
         self.client = self.client_context.__enter__()
+        authorize_access(self.client)
 
     def tearDown(self) -> None:
         self.client_context.__exit__(None, None, None)

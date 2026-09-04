@@ -3,7 +3,7 @@
     Inter, Pretendard, "Noto Sans KR", system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
   color: #17212b;
-  background: #eef2f6;
+  background: #f1f6fb;
   font-synthesis: none;
 }
 
@@ -15,6 +15,26 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+}
+
+.site-brand {
+  position: fixed;
+  z-index: 20;
+  top: 20px;
+  left: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #101318;
+  font-size: 18px;
+  font-weight: 850;
+  letter-spacing: -0.03em;
+}
+
+.site-brand-logo {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
 }
 
 button,
@@ -37,7 +57,7 @@ input {
 .app-shell {
   width: min(1120px, calc(100% - 32px));
   margin: 0 auto;
-  padding: 40px 0 64px;
+  padding: 92px 0 64px;
 }
 
 .page-header {
@@ -50,7 +70,7 @@ input {
 
 .eyebrow {
   margin: 0 0 7px;
-  color: #17765b;
+  color: #0b72d9;
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.15em;
@@ -97,7 +117,7 @@ h2 {
 .progress-value {
   height: 100%;
   border-radius: inherit;
-  background: #17765b;
+  background: linear-gradient(90deg, #42bdf5, #0b72d9);
   transition: width 220ms ease;
 }
 
@@ -121,7 +141,7 @@ h2 {
 
 .survey-question-number {
   margin-bottom: 8px;
-  color: #17765b;
+  color: #0b72d9;
   font-size: 13px;
   font-weight: 800;
 }
@@ -154,13 +174,13 @@ h2 {
 
 .survey-option:hover,
 .survey-option.selected {
-  border-color: #4a9a80;
-  background: #f1f8f5;
+  border-color: #65acec;
+  background: #eef7ff;
 }
 
 .survey-option input {
   margin-top: 3px;
-  accent-color: #17765b;
+  accent-color: #0b72d9;
 }
 
 .survey-option strong,
@@ -206,6 +226,76 @@ h2 {
 
 .survey-confirmation .completed-card {
   width: min(520px, calc(100% - 32px));
+}
+
+.access-gate-shell {
+  padding: 24px;
+}
+
+.access-gate-card {
+  width: min(460px, 100%);
+  padding: 36px;
+}
+
+.access-gate-card h1 {
+  margin: 0;
+  color: #101318;
+  font-size: clamp(30px, 7vw, 36px);
+}
+
+.access-brand-lockup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 13px;
+  margin-bottom: 14px;
+}
+
+.access-brand-logo {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.access-gate-description {
+  margin-bottom: 26px;
+  color: #66737f;
+  font-weight: 500;
+  line-height: 1.65;
+}
+
+.access-instruction-line {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.access-code-label {
+  display: block;
+  margin-bottom: 8px;
+  color: #43515d;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.access-code-input {
+  width: 100%;
+  padding: 14px 15px;
+  border: 1px solid #cfd8df;
+  border-radius: 11px;
+  color: #17212b;
+  background: #fff;
+  outline: none;
+}
+
+.access-code-input:focus {
+  border-color: #1687ed;
+  box-shadow: 0 0 0 3px rgb(22 135 237 / 15%);
+}
+
+.access-submit-button {
+  width: 100%;
+  margin-top: 18px;
 }
 
 .market-card {
@@ -274,7 +364,7 @@ h2 {
 
 .price-line {
   fill: none;
-  stroke: #16775b;
+  stroke: #1687ed;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 3;
@@ -282,7 +372,7 @@ h2 {
 
 .latest-point {
   fill: #fff;
-  stroke: #16775b;
+  stroke: #1687ed;
   stroke-width: 3;
 }
 
@@ -292,7 +382,7 @@ h2 {
 }
 
 .latest-label {
-  fill: #116248;
+  fill: #0967c4;
   font-size: 12px;
   font-weight: 800;
 }
@@ -306,8 +396,8 @@ h2 {
 .step-badge {
   padding: 7px 11px;
   border-radius: 99px;
-  color: #176a52;
-  background: #e8f5f0;
+  color: #0967c4;
+  background: #e8f4ff;
   font-size: 12px;
   font-weight: 800;
 }
@@ -315,7 +405,7 @@ h2 {
 .allocation-slider {
   width: 100%;
   margin: 24px 0 18px;
-  accent-color: #17765b;
+  accent-color: #1687ed;
   cursor: pointer;
 }
 
@@ -340,7 +430,7 @@ h2 {
 }
 
 .stimulus-card span {
-  color: #17765b;
+  color: #0b72d9;
   font-size: 12px;
   font-weight: 800;
 }
@@ -379,8 +469,8 @@ h2 {
 }
 
 .allocation-value.risk {
-  color: #0d684c;
-  background: #eaf6f2;
+  color: #0967c4;
+  background: #eaf4ff;
 }
 
 .allocation-value.cash {
@@ -395,13 +485,13 @@ h2 {
   border: 0;
   border-radius: 12px;
   color: #fff;
-  background: #17765b;
+  background: linear-gradient(135deg, #35b4f4 0%, #1687ed 52%, #0b6fd8 100%);
   font-weight: 800;
   cursor: pointer;
 }
 
 .submit-button:hover:not(:disabled) {
-  background: #105f48;
+  background: linear-gradient(135deg, #24a9ed 0%, #0c78df 52%, #075fbc 100%);
 }
 
 .submit-button:disabled {
@@ -466,8 +556,8 @@ h2 {
   width: 34px;
   height: 34px;
   margin: 0 auto 18px;
-  border: 4px solid #d9e8e2;
-  border-top-color: #17765b;
+  border: 4px solid #dcecff;
+  border-top-color: #1687ed;
   border-radius: 50%;
   animation: analysis-spin 900ms linear infinite;
 }
@@ -514,8 +604,8 @@ h2 {
 }
 
 .result-card.emphasized {
-  border-color: #73af9c;
-  background: #f1f8f5;
+  border-color: #78baf5;
+  background: #eef7ff;
 }
 
 .analysis-card {
@@ -546,7 +636,7 @@ h2 {
 }
 
 .trait-row strong {
-  color: #0d684c;
+  color: #0967c4;
   white-space: nowrap;
 }
 
@@ -561,14 +651,14 @@ h2 {
   margin: 0 0 14px;
   padding: 6px 10px;
   border-radius: 999px;
-  color: #0d684c;
-  background: #eaf6f2;
+  color: #0967c4;
+  background: #eaf4ff;
   font-size: 13px;
   font-weight: 800;
 }
 
 .final-analysis-card {
-  border-color: #9fcbbd;
+  border-color: #a6d2fa;
 }
 
 .restart-measurement-section {
@@ -589,8 +679,8 @@ h2 {
 }
 
 .secondary-button:hover:not(:disabled) {
-  border-color: #6f8d82;
-  background: #f4f8f6;
+  border-color: #76aede;
+  background: #f1f7fd;
 }
 
 .secondary-button:disabled {
@@ -645,9 +735,24 @@ h2 {
 }
 
 @media (max-width: 720px) {
+  .site-brand {
+    top: 14px;
+    left: 16px;
+    font-size: 16px;
+  }
+
+  .site-brand-logo {
+    width: 29px;
+    height: 29px;
+  }
+
+  .access-instruction-line {
+    font-size: clamp(12px, 3.7vw, 16px);
+  }
+
   .app-shell {
     width: min(100% - 20px, 1120px);
-    padding-top: 24px;
+    padding-top: 76px;
   }
 
   .page-header {

@@ -15,6 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from database import connect  # noqa: E402
 from main import create_app  # noqa: E402
+from test_support import TEST_ACCESS_CODE, authorize_access  # noqa: E402
 
 
 class ReassessmentTargetedTests(unittest.TestCase):
@@ -25,9 +26,11 @@ class ReassessmentTargetedTests(unittest.TestCase):
             database_path=self.database_path,
             scenario_dir=BACKEND_DIR / "scenarios",
             scenario_picker=lambda candidates: candidates[0],
+            access_code=TEST_ACCESS_CODE,
         )
         self.client_context = TestClient(app)
         self.client = self.client_context.__enter__()
+        authorize_access(self.client)
 
     def tearDown(self) -> None:
         self.client_context.__exit__(None, None, None)

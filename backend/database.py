@@ -363,6 +363,15 @@ CREATE TABLE IF NOT EXISTS llm_analysis_artifacts (
     public_result_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS access_sessions (
+    session_token_hash TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS access_sessions_expires
+ON access_sessions (expires_at);
+
 CREATE TRIGGER IF NOT EXISTS survey_responses_no_update
 BEFORE UPDATE ON survey_responses
 BEGIN SELECT RAISE(ABORT, 'survey_responses are append-only'); END;

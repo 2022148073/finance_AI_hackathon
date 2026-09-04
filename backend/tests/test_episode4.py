@@ -19,7 +19,7 @@ from features import calculate_episode4_features
 from main import create_app
 from routing import route_episode4
 from scenario_store import load_scenarios
-from test_support import complete_survey
+from test_support import TEST_ACCESS_CODE, authorize_access, complete_survey
 
 
 class Episode4RoutingTests(unittest.TestCase):
@@ -138,9 +138,11 @@ class Episode4ApiTests(unittest.TestCase):
             database_path=self.database_path,
             scenario_dir=BACKEND_DIR / "scenarios",
             scenario_picker=lambda candidates: candidates[0],
+            access_code=TEST_ACCESS_CODE,
         )
         self.client_context = TestClient(self.app)
         self.client = self.client_context.__enter__()
+        authorize_access(self.client)
 
     def tearDown(self) -> None:
         self.client_context.__exit__(None, None, None)

@@ -14,6 +14,16 @@ from typing import Callable
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+
+from access_gate import (
+    ACCESS_COOKIE_NAME,
+    AccessCodeVerifier,
+    AccessRateLimiter,
+    access_session_is_valid,
+    create_access_session,
+)
 
 from database import (
     connect,
@@ -45,6 +55,7 @@ from features import (
 from routing import route_episode3, route_episode4
 from scenario_store import Scenario, load_scenarios
 from schemas import (
+    AccessCodeSubmission,
     DecisionSubmission,
     EntryRiskShareSubmission,
     Episode5PostSubmission,
@@ -70,6 +81,7 @@ from survey import (
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
+load_dotenv(BACKEND_DIR / ".env", override=False)
 DEFAULT_DATABASE_PATH = BACKEND_DIR / "data" / "experiment.db"
 DEFAULT_SCENARIO_DIR = BACKEND_DIR / "scenarios"
 DEFAULT_STIMULUS_DIR = DEFAULT_SCENARIO_DIR / "episode5" / "stimuli"
@@ -787,6 +799,12 @@ def create_app(
     scenario_picker: ScenarioPicker | None = None,
     stimulus_dir: Path | None = None,
     e5_randomizer: Randomizer | None = None,
+    access_code: str | None = None,
+    access_code_hash: str | None = None,
+    access_cookie_secure: bool | None = None,
+    access_session_ttl_seconds: int | None = None,
+    access_rate_limit_attempts: int | None = None,
+    access_rate_limit_window_seconds: int | None = None,
 ) -> FastAPI:
     resolved_database_path = Path(
         database_path
@@ -797,6 +815,36 @@ def create_app(
     stimuli = StimulusStore.load(Path(stimulus_dir or DEFAULT_STIMULUS_DIR))
     picker = scenario_picker or secrets.choice
     randomizer = e5_randomizer or secrets.SystemRandom()
+    if access_code is not None and access_code_hash is not None:
+        raise ValueError("Provide access_code or access_code_hash, not both")
+    access_verifier = (
+        AccessCodeVerifier(encoded_hash=access_code_hash, plain_code=access_code)
+        if access_code is not None or access_code_hash is not None
+        else AccessCodeVerifier.from_environment()
+    )
+    production = os.getenv("FLOWBIT_ENV", "development").strip().lower() == "production"
+    cookie_secure = (
+        access_cookie_secure
+        if access_cookie_secure is not None
+        else os.getenv("FLOWBIT_COOKIE_SECURE", str(production)).strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    cookie_same_site = os.getenv("FLOWBIT_COOKIE_SAMESITE", "lax").strip().lower()
+    if cookie_same_site not in {"lax", "strict", "none"}:
+        raise ValueError("FLOWBIT_COOKIE_SAMESITE must be lax, strict, or none")
+    if cookie_same_site == "none" and not cookie_secure:
+        raise ValueError("SameSite=None requires a Secure access cookie")
+    session_ttl = access_session_ttl_seconds or int(
+        os.getenv("FLOWBIT_ACCESS_SESSION_TTL_SECONDS", "28800")
+    )
+    if not 300 <= session_ttl <= 2_592_000:
+        raise ValueError("Access session TTL must be between 300 and 2592000 seconds")
+    rate_limiter = AccessRateLimiter(
+        access_rate_limit_attempts
+        or int(os.getenv("FLOWBIT_ACCESS_RATE_LIMIT_ATTEMPTS", "5")),
+        access_rate_limit_window_seconds
+        or int(os.getenv("FLOWBIT_ACCESS_RATE_LIMIT_WINDOW_SECONDS", "300")),
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -813,6 +861,30 @@ def create_app(
     application.state.scenario_picker = picker
     application.state.stimuli = stimuli
     application.state.e5_randomizer = randomizer
+    application.state.access_verifier = access_verifier
+    application.state.access_rate_limiter = rate_limiter
+    application.state.access_cookie_secure = cookie_secure
+    application.state.access_cookie_same_site = cookie_same_site
+    application.state.access_session_ttl_seconds = session_ttl
+
+    @application.middleware("http")
+    async def require_access_session(request: Request, call_next):
+        path = request.url.path
+        public_api = path == "/api/health" or path.startswith("/api/access/")
+        if (
+            request.method != "OPTIONS"
+            and path.startswith("/api/")
+            and not public_api
+        ):
+            token = request.cookies.get(ACCESS_COOKIE_NAME)
+            with closing(connect(Path(request.app.state.database_path))) as connection:
+                authenticated = access_session_is_valid(connection, token)
+            if not authenticated:
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content={"detail": "접근 인증이 필요합니다."},
+                )
+        return await call_next(request)
 
     origins = [
         origin.strip()
@@ -833,6 +905,57 @@ def create_app(
     @application.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @application.get("/api/access/session")
+    def access_session(request: Request) -> dict[str, bool]:
+        token = request.cookies.get(ACCESS_COOKIE_NAME)
+        with closing(connect(Path(request.app.state.database_path))) as connection:
+            if not access_session_is_valid(connection, token):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="접근 인증이 필요합니다.",
+                )
+        return {"authenticated": True}
+
+    @application.post("/api/access/verify")
+    def verify_access_code(
+        payload: AccessCodeSubmission,
+        request: Request,
+    ) -> JSONResponse:
+        client_key = request.client.host if request.client is not None else "unknown"
+        if not request.app.state.access_rate_limiter.allow(client_key):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="잠시 후 다시 시도해 주세요.",
+            )
+        verifier: AccessCodeVerifier = request.app.state.access_verifier
+        if not verifier.configured:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="접근 서비스를 준비하지 못했습니다.",
+            )
+        if not verifier.verify(payload.access_code):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="접근 코드를 확인해 주세요.",
+            )
+        with closing(connect(Path(request.app.state.database_path))) as connection:
+            token, expires_at = create_access_session(
+                connection, request.app.state.access_session_ttl_seconds
+            )
+            connection.commit()
+        response = JSONResponse({"success": True})
+        response.set_cookie(
+            key=ACCESS_COOKIE_NAME,
+            value=token,
+            max_age=request.app.state.access_session_ttl_seconds,
+            expires=expires_at,
+            path="/",
+            secure=request.app.state.access_cookie_secure,
+            httponly=True,
+            samesite=request.app.state.access_cookie_same_site,
+        )
+        return response
 
     @application.post(
         "/api/assessment-attempts", status_code=status.HTTP_201_CREATED

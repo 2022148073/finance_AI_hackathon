@@ -18,6 +18,16 @@ VALID_SURVEY_ANSWERS: dict[str, str | list[str]] = {
     "vulnerability": "no",
 }
 
+TEST_ACCESS_CODE = "flowbit-test-access"
+
+
+def authorize_access(client: TestClient) -> None:
+    response = client.post(
+        "/api/access/verify", json={"access_code": TEST_ACCESS_CODE}
+    )
+    if response.status_code != 200:
+        raise AssertionError(response.text)
+
 
 def complete_survey(client: TestClient, user_id: str) -> None:
     state = client.post("/api/survey/sessions", json={"user_id": user_id})

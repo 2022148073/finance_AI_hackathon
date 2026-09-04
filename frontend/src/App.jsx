@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import AccessGate from "./AccessGate.jsx";
 import Survey from "./Survey.jsx";
 
 const API_BASE = window.__API_BASE_URL__ ?? "http://127.0.0.1:8000";
@@ -118,11 +119,15 @@ function PriceChart({ points, asset }) {
 
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     ...options,
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401) {
+      window.dispatchEvent(new Event("flowbit:access-required"));
+    }
     const detail =
       typeof body.detail === "string"
         ? body.detail
@@ -264,6 +269,8 @@ function AnalysisResult({ run, onRetry, onRestart, restarting, restartError }) {
 }
 
 export default function App() {
+  const [accessState, setAccessState] = useState("checking");
+  const [accessError, setAccessError] = useState("");
   const [session, setSession] = useState(null);
   const [questionnaire, setQuestionnaire] = useState(null);
   const [surveySaved, setSurveySaved] = useState(false);
@@ -273,6 +280,37 @@ export default function App() {
   const [error, setError] = useState("");
   const [analysisRun, setAnalysisRun] = useState(null);
   const analysisRequestToken = useRef(0);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${API_BASE}/api/access/session`, { credentials: "include" })
+      .then((response) => {
+        if (!active) return;
+        setAccessState(response.ok ? "granted" : "required");
+      })
+      .catch(() => {
+        if (!active) return;
+        setAccessError("접근 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+        setAccessState("required");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    function requireAccess() {
+      analysisRequestToken.current += 1;
+      setAccessState("required");
+      setSession(null);
+      setQuestionnaire(null);
+      setSurveySaved(false);
+      setAnalysisRun(null);
+      setLoading(false);
+    }
+    window.addEventListener("flowbit:access-required", requireAccess);
+    return () => window.removeEventListener("flowbit:access-required", requireAccess);
+  }, []);
 
   async function startEpisode(number) {
     return api(`/api/episode${number}/sessions`, {
@@ -325,7 +363,9 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (accessState !== "granted") return undefined;
     let active = true;
+    setLoading(true);
     api("/api/survey/sessions", {
       method: "POST",
       body: JSON.stringify({ user_id: getUserId() }),
@@ -349,7 +389,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [accessState]);
 
   useEffect(() => {
     if (!session) return;
@@ -520,6 +560,22 @@ export default function App() {
     [],
   );
 
+  if (accessState === "checking") {
+    return <main className="center-message">접근 상태를 확인하고 있습니다…</main>;
+  }
+  if (accessState === "required") {
+    return (
+      <AccessGate
+        apiBase={API_BASE}
+        initialError={accessError}
+        onGranted={() => {
+          setAccessError("");
+          setError("");
+          setAccessState("granted");
+        }}
+      />
+    );
+  }
   if (loading) {
     return <main className="center-message">시나리오를 준비하고 있습니다…</main>;
   }

@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,9 +8,11 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const frontendDir = resolve(scriptDir, "..");
 const distDir = resolve(frontendDir, "dist");
 const assetsDir = resolve(distDir, "assets");
+const publicDir = resolve(frontendDir, "public");
 
 await rm(distDir, { recursive: true, force: true });
 await mkdir(assetsDir, { recursive: true });
+await cp(publicDir, distDir, { recursive: true });
 
 const sourceHtml = await readFile(resolve(frontendDir, "index.html"), "utf8");
 const productionHtml = sourceHtml

@@ -5,6 +5,10 @@ import math
 from pydantic import BaseModel, Field, field_validator
 
 
+class AccessCodeSubmission(BaseModel):
+    access_code: str = Field(min_length=1, max_length=256)
+
+
 class StartSessionRequest(BaseModel):
     user_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 

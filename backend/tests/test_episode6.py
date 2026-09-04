@@ -18,7 +18,7 @@ if str(BACKEND_DIR) not in sys.path:
 from database import connect
 from main import create_app
 from scenario_store import load_scenarios
-from test_support import complete_survey
+from test_support import TEST_ACCESS_CODE, authorize_access, complete_survey
 
 
 class RecordingE6Picker:
@@ -41,9 +41,11 @@ class Episode6ApiTests(unittest.TestCase):
             database_path=self.database_path,
             scenario_dir=BACKEND_DIR / "scenarios",
             scenario_picker=self.picker,
+            access_code=TEST_ACCESS_CODE,
         )
         self.client_context = TestClient(self.app)
         self.client = self.client_context.__enter__()
+        authorize_access(self.client)
 
     def tearDown(self) -> None:
         self.client_context.__exit__(None, None, None)

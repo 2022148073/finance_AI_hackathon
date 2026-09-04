@@ -17,6 +17,7 @@ if str(BACKEND_DIR) not in sys.path:
 from database import connect
 from main import create_app
 from scenario_store import load_scenarios
+from test_support import TEST_ACCESS_CODE, authorize_access
 
 
 class SequentialEpisodeApiTests(unittest.TestCase):
@@ -32,9 +33,11 @@ class SequentialEpisodeApiTests(unittest.TestCase):
                 if "E1_01" in candidates
                 else ("E2_01" if "E2_01" in candidates else candidates[0])
             ),
+            access_code=TEST_ACCESS_CODE,
         )
         self.client_context = TestClient(self.app)
         self.client = self.client_context.__enter__()
+        authorize_access(self.client)
 
     def tearDown(self) -> None:
         self.client_context.__exit__(None, None, None)
