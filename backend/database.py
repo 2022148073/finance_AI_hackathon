@@ -329,6 +329,7 @@ CREATE TABLE IF NOT EXISTS llm_analysis_runs (
     manifest_schema_version TEXT NOT NULL,
     behavioral_input_schema_version TEXT NOT NULL,
     comparison_input_schema_version TEXT NOT NULL,
+    input_fingerprint TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     completed_at TEXT,
@@ -338,6 +339,19 @@ CREATE TABLE IF NOT EXISTS llm_analysis_runs (
 
 CREATE INDEX IF NOT EXISTS llm_analysis_runs_user_created
 ON llm_analysis_runs (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS assessment_attempts (
+    assessment_id TEXT PRIMARY KEY,
+    participant_id TEXT NOT NULL,
+    attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
+    previous_assessment_id TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (participant_id, attempt_number),
+    UNIQUE (participant_id, previous_assessment_id)
+);
+
+CREATE INDEX IF NOT EXISTS assessment_attempts_participant_number
+ON assessment_attempts (participant_id, attempt_number DESC);
 
 CREATE TABLE IF NOT EXISTS llm_analysis_artifacts (
     analysis_id TEXT PRIMARY KEY REFERENCES llm_analysis_runs(analysis_id),
@@ -352,6 +366,14 @@ CREATE TABLE IF NOT EXISTS llm_analysis_artifacts (
 CREATE TRIGGER IF NOT EXISTS survey_responses_no_update
 BEFORE UPDATE ON survey_responses
 BEGIN SELECT RAISE(ABORT, 'survey_responses are append-only'); END;
+
+CREATE TRIGGER IF NOT EXISTS assessment_attempts_no_update
+BEFORE UPDATE ON assessment_attempts
+BEGIN SELECT RAISE(ABORT, 'assessment_attempts are immutable'); END;
+
+CREATE TRIGGER IF NOT EXISTS assessment_attempts_no_delete
+BEFORE DELETE ON assessment_attempts
+BEGIN SELECT RAISE(ABORT, 'assessment_attempts are append-only'); END;
 
 CREATE TRIGGER IF NOT EXISTS survey_responses_no_delete
 BEFORE DELETE ON survey_responses
@@ -734,6 +756,11 @@ def initialize_database(database_path: Path) -> None:
             connection.execute(
                 "ALTER TABLE llm_analysis_runs ADD COLUMN "
                 "analysis_config_version TEXT NOT NULL DEFAULT 'legacy'"
+            )
+        if "input_fingerprint" not in run_columns:
+            connection.execute(
+                "ALTER TABLE llm_analysis_runs ADD COLUMN "
+                "input_fingerprint TEXT NOT NULL DEFAULT 'legacy'"
             )
 
         artifact_columns = {

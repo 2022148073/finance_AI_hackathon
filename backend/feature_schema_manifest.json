@@ -1,10 +1,10 @@
 {
-  "schema_version": "llm_feature_schema_manifest_v7",
+  "schema_version": "llm_feature_schema_manifest_v10",
   "feature_schema_version": "llm_features_v1",
   "feature_selection_schema_version": "llm_feature_selection_v1",
   "input_schema_versions": {
     "behavioral": "llm_behavioral_input_v4",
-    "comparison": "llm_comparison_input_v8"
+    "comparison": "llm_comparison_input_v11"
   },
   "policy": {
     "allowlist_only": true,

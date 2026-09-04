@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Survey from "./Survey.jsx";
 
 const API_BASE = window.__API_BASE_URL__ ?? "http://127.0.0.1:8000";
+const USER_ID_KEY = "experiment_user_id";
+const PARTICIPANT_ID_KEY = "experiment_participant_id";
 const ANALYSIS_POLL_INTERVAL_MS = 1500;
 // Kimi-K3 always reasons before returning structured output. Two sequential
 // calls may take several minutes, so keep a finite but sufficiently wide UI
@@ -9,15 +11,26 @@ const ANALYSIS_POLL_INTERVAL_MS = 1500;
 const ANALYSIS_POLL_TIMEOUT_MS = 25 * 60 * 1000;
 
 function getUserId() {
-  const key = "experiment_user_id";
   const existing =
-    window.localStorage.getItem(key) ??
+    window.localStorage.getItem(USER_ID_KEY) ??
     window.localStorage.getItem("episode1_user_id");
-  if (existing) window.localStorage.setItem(key, existing);
+  if (existing) window.localStorage.setItem(USER_ID_KEY, existing);
   if (existing) return existing;
   const created = `web_${crypto.randomUUID().replaceAll("-", "")}`;
-  window.localStorage.setItem(key, created);
+  window.localStorage.setItem(USER_ID_KEY, created);
   return created;
+}
+
+function getParticipantId() {
+  const existing = window.localStorage.getItem(PARTICIPANT_ID_KEY);
+  if (existing) return existing;
+  const created = getUserId();
+  window.localStorage.setItem(PARTICIPANT_ID_KEY, created);
+  return created;
+}
+
+function setActiveAssessmentId(assessmentId) {
+  window.localStorage.setItem(USER_ID_KEY, assessmentId);
 }
 
 function PriceChart({ points, asset }) {
@@ -119,7 +132,8 @@ async function api(path, options = {}) {
   return body;
 }
 
-function AnalysisResult({ run, onRetry }) {
+function AnalysisResult({ run, onRetry, onRestart, restarting, restartError }) {
+  const [showRestartConfirmation, setShowRestartConfirmation] = useState(false);
   if (!run || run.status === "queued" || run.status === "processing") {
     return (
       <main className="center-message analysis-state">
@@ -199,6 +213,51 @@ function AnalysisResult({ run, onRetry }) {
         <h2>종합 해석</h2>
         <p className="analysis-confidence">해석 신뢰도 {analysis.confidence}</p>
         <p className="analysis-description">{analysis.final_analysis}</p>
+      </section>
+
+      <section className="analysis-card">
+        <p className="eyebrow">AI GUIDANCE</p>
+        <h2>AI 맞춤 제안</h2>
+        <p className="analysis-description">{analysis.personalized_guidance}</p>
+      </section>
+
+      <section className="restart-measurement-section">
+        {!showRestartConfirmation ? (
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => setShowRestartConfirmation(true)}
+          >
+            다시 측정하기
+          </button>
+        ) : (
+          <div className="restart-confirmation" role="alertdialog" aria-live="polite">
+            <h2>새로운 측정을 시작할까요?</h2>
+            <p>
+              기존 설문, 행동 기록과 분석 결과는 삭제되지 않아요. 새로운 응답은
+              별도의 측정 회차와 분석 결과로 저장돼요.
+            </p>
+            {restartError && <p className="inline-error">{restartError}</p>}
+            <div className="restart-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={restarting}
+                onClick={() => setShowRestartConfirmation(false)}
+              >
+                취소
+              </button>
+              <button
+                className="submit-button"
+                type="button"
+                disabled={restarting}
+                onClick={onRestart}
+              >
+                {restarting ? "새 측정을 준비하고 있어요…" : "확인하고 다시 시작"}
+              </button>
+            </div>
+          </div>
+        )}
       </section>
     </main>
   );
@@ -409,6 +468,41 @@ export default function App() {
     }
   }
 
+  async function restartMeasurement() {
+    if (submitting || loading) return;
+    setSubmitting(true);
+    setError("");
+    const previousAssessmentId = getUserId();
+    try {
+      const attempt = await api("/api/assessment-attempts", {
+        method: "POST",
+        body: JSON.stringify({
+          participant_id: getParticipantId(),
+          previous_assessment_id: previousAssessmentId,
+        }),
+      });
+      setActiveAssessmentId(attempt.assessment_id);
+      analysisRequestToken.current += 1;
+      setAnalysisRun(null);
+      setSession(null);
+      setQuestionnaire(null);
+      setSurveySaved(false);
+      setRiskPercent(0);
+      setLoading(true);
+
+      const survey = await api("/api/survey/sessions", {
+        method: "POST",
+        body: JSON.stringify({ user_id: attempt.assessment_id }),
+      });
+      setQuestionnaire(survey.questionnaire);
+    } catch (reason) {
+      setError(reason.message || "새 측정을 시작하지 못했습니다.");
+    } finally {
+      setLoading(false);
+      setSubmitting(false);
+    }
+  }
+
   useEffect(() => {
     if (
       session?.episode === "E6" &&
@@ -463,7 +557,15 @@ export default function App() {
     return <main className="center-message error">{error}</main>;
   }
   if (session.episode === "E6" && session.episode_status === "completed") {
-    return <AnalysisResult run={analysisRun} onRetry={startAnalysis} />;
+    return (
+      <AnalysisResult
+        run={analysisRun}
+        onRetry={startAnalysis}
+        onRestart={restartMeasurement}
+        restarting={submitting}
+        restartError={error}
+      />
+    );
   }
 
   return (

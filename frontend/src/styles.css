@@ -571,6 +571,57 @@ h2 {
   border-color: #9fcbbd;
 }
 
+.restart-measurement-section {
+  display: flex;
+  justify-content: center;
+  margin: 32px 0 8px;
+}
+
+.secondary-button {
+  border: 1px solid #aebbc4;
+  border-radius: 10px;
+  padding: 12px 20px;
+  color: #34434e;
+  background: #fff;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.secondary-button:hover:not(:disabled) {
+  border-color: #6f8d82;
+  background: #f4f8f6;
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.restart-confirmation {
+  width: min(100%, 680px);
+  border: 1px solid #d5dee3;
+  border-radius: 16px;
+  padding: 24px;
+  background: #f8fafb;
+}
+
+.restart-confirmation h2 {
+  margin-top: 0;
+}
+
+.restart-confirmation p {
+  color: #52606d;
+  line-height: 1.7;
+}
+
+.restart-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
 .gap-list {
   margin: 18px 0 0;
   padding-left: 22px;

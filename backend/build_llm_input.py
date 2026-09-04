@@ -14,13 +14,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
 from collections import defaultdict
+from contextlib import closing
 from pathlib import Path
 from statistics import mean
 from typing import Any, Iterable, Mapping
+
+from survey import QUESTION_BY_ID
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -433,7 +437,12 @@ def _stated_preference(
     manifest: Mapping[str, Any],
 ) -> dict[str, Any]:
     survey = connection.execute(
-        "SELECT score,profile FROM survey_results WHERE user_id = ?", (user_id,)
+        "SELECT results.score,results.profile,responses.raw_answers_json "
+        "FROM survey_results AS results "
+        "JOIN survey_responses AS responses "
+        "ON responses.survey_id = results.survey_id "
+        "WHERE results.user_id = ?",
+        (user_id,),
     ).fetchone()
     stated = connection.execute(
         "SELECT * FROM stated_features WHERE user_id = ?", (user_id,)
@@ -455,12 +464,29 @@ def _stated_preference(
         raise LlmInputBuildError(
             "Missing stated feature columns: " + ", ".join(sorted(missing))
         )
+    raw_answers = json.loads(str(survey["raw_answers_json"]))
+
+    def option_label(question_id: str) -> str:
+        option_id = raw_answers.get(question_id)
+        for option in QUESTION_BY_ID[question_id]["options"]:
+            if option["id"] == option_id:
+                return str(option["label"])
+        raise LlmInputBuildError(
+            f"Survey answer does not match configured options: {question_id}"
+        )
+
     return {
         "feature_version": actual_version,
         "features": features,
         "survey_baseline": {
             "score": _clean_value("score", survey["score"]),
             "profile": survey["profile"],
+        },
+        "financial_context": {
+            "monthly_income_range": option_label("monthly_income"),
+            "investment_asset_ratio_range": option_label(
+                "investment_asset_ratio"
+            ),
         },
     }
 
@@ -1224,6 +1250,19 @@ def _comparison_request(
             "Information responsiveness has no aggressive or conservative direction and must only be described as response magnitude.",
             "Choose confidence_level only from the manifest confidence enum and use the Python cross-context confidence anchor as calibration evidence.",
             "Do not recommend any investment product, allocation, purchase, sale, or investment strategy.",
+            "For personalized_guidance, do not list monthly income, current investment-asset ratio, and the fixed revealed profile separately; compare their relationship and interpret them together.",
+            "Reason in this order for personalized_guidance: qualitatively assess current risk exposure from the investment-asset ratio; compare that exposure with the fixed revealed profile; explain alignment or mismatch; then suggest what to review before a future allocation change.",
+            "Use monthly income only as a limited indicator of financial circumstances. It cannot establish total assets, debt, fixed expenses, emergency savings, dependents, cash holdings, or overall financial capacity, so do not make definitive claims about affordability.",
+            "If the revealed profile is aggressive but current investment exposure is low, do not describe the current state as excessive risk exposure.",
+            "If the revealed profile is conservative but current investment exposure is high, you may explain that the difference between observed risk tolerance and current exposure deserves review.",
+            "After assessing the current state, explain that any future allocation change should also consider unknown financial factors such as living expenses, emergency funds, debt, and expected expenses.",
+            "Do not repeat generic advice such as checking emergency funds or securing liquidity for every person without first explaining the relationship between the supplied financial context and the fixed revealed profile.",
+            "Write personalized_guidance as 2 to 4 natural Korean sentences and include all three stages: current-state assessment, relationship to the revealed profile, and a review or consideration direction.",
+            "Do not invent a formula, financial-suitability score, or precise appropriate allocation ratio. Interpret the supplied relationships qualitatively.",
+            "Do not recommend a specific stock, ETF, cryptoasset, financial product, loan-funded investment, or leverage.",
+            "Do not imply guaranteed or certain investment returns.",
+            "Do not prescribe a precise allocation such as 반드시 30%로 줄이세요. Suggest only general review directions such as checking liquidity, emergency funds, and risk tolerance.",
+            "Personalized guidance must not alter or reclassify the fixed revealed profile.",
             "Return JSON only.",
         ],
         "ordinal_levels": list(scoring["ordinal_values"]),
@@ -1243,6 +1282,9 @@ def _comparison_request(
             "key_behavioral_evidence": [],
             "final_analysis": (
                 "검증된 행동 근거만 사용해 시장 선택 과정의 행동 특성을 자연스러운 한국어 해요체로 설명해요."
+            ),
+            "personalized_guidance": (
+                "현재 투자 노출 평가, 행동 기반 성향과의 관계, 향후 점검 방향을 순서대로 포함한 2~4개의 자연스러운 한국어 해요체 문장으로 제안해요."
             ),
         },
     }
@@ -1270,7 +1312,7 @@ def build_behavioral_input(
     """Build Call 1 input without ever placing stated values in its context."""
     if not user_id or len(user_id) > 128:
         raise LlmInputBuildError("A valid user_id is required")
-    with _connect_read_only(database_path) as connection:
+    with closing(_connect_read_only(database_path)) as connection:
         sessions = _completed_sessions(connection, user_id)
         behavioral = _behavioral_analysis(connection, sessions, manifest)
     quantitative_baselines = calculate_quantitative_baselines(
@@ -1291,6 +1333,31 @@ def build_behavioral_input(
     }
 
 
+def build_analysis_input_fingerprint(
+    database_path: Path,
+    user_id: str,
+    manifest: Mapping[str, Any],
+) -> str:
+    """Hash the canonical stated and behavioral inputs used by the two-call run."""
+    if not user_id or len(user_id) > 128:
+        raise LlmInputBuildError("A valid user_id is required")
+    with closing(_connect_read_only(database_path)) as connection:
+        sessions = _completed_sessions(connection, user_id)
+        stated = _stated_preference(connection, user_id, manifest)
+        behavioral = _behavioral_analysis(connection, sessions, manifest)
+    canonical = json.dumps(
+        {
+            "stated_preference": stated,
+            "behavioral_analysis": behavioral,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def build_comparison_input(
     database_path: Path,
     user_id: str,
@@ -1300,7 +1367,7 @@ def build_comparison_input(
     """Build Call 2 from stated preference and a fixed Call 1 result."""
     if not user_id or len(user_id) > 128:
         raise LlmInputBuildError("A valid user_id is required")
-    with _connect_read_only(database_path) as connection:
+    with closing(_connect_read_only(database_path)) as connection:
         sessions = _completed_sessions(connection, user_id)
         stated = _stated_preference(connection, user_id, manifest)
         behavioral = _behavioral_analysis(connection, sessions, manifest)

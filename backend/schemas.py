@@ -9,6 +9,15 @@ class StartSessionRequest(BaseModel):
     user_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 
 
+class RestartAssessmentRequest(BaseModel):
+    participant_id: str = Field(
+        min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+    previous_assessment_id: str = Field(
+        min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+
+
 class SurveySubmission(StartSessionRequest):
     answers: dict[str, str | list[str]]
 

@@ -14,6 +14,7 @@ NVIDIA references (checked 2026-09-01):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -30,6 +31,7 @@ from dotenv import load_dotenv
 
 from build_llm_input import (
     LlmInputBuildError,
+    build_analysis_input_fingerprint,
     build_behavioral_input,
     build_comparison_input,
     build_feature_guide,
@@ -39,6 +41,7 @@ from database import connect
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
+LOGGER = logging.getLogger(__name__)
 load_dotenv(BACKEND_DIR / ".env", override=False)
 
 DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
@@ -206,6 +209,12 @@ def create_or_restore_analysis_run(
     """Create one durable run, or restore an active/completed run for the user."""
     settings = _runtime_settings()
     manifest = load_feature_manifest()
+    try:
+        input_fingerprint = build_analysis_input_fingerprint(
+            database_path, user_id, manifest
+        )
+    except LlmInputBuildError as exc:
+        raise AnalysisEligibilityError(str(exc)) from exc
     now = _utc_now()
     with closing(connect(database_path)) as connection:
         try:
@@ -227,6 +236,7 @@ def create_or_restore_analysis_run(
                     == versions["behavioral"],
                     latest["comparison_input_schema_version"]
                     == versions["comparison"],
+                    latest["input_fingerprint"] == input_fingerprint,
                 )
             )
             if (
@@ -275,8 +285,8 @@ def create_or_restore_analysis_run(
                 "INSERT INTO llm_analysis_runs (analysis_id,user_id,status,model,"
                 "analysis_config_version,"
                 "manifest_schema_version,behavioral_input_schema_version,"
-                "comparison_input_schema_version,created_at,updated_at) "
-                "VALUES (?,?,'queued',?,?,?,?,?,?,?)",
+                "comparison_input_schema_version,input_fingerprint,created_at,updated_at) "
+                "VALUES (?,?,'queued',?,?,?,?,?,?,?,?)",
                 (
                     analysis_id,
                     user_id,
@@ -285,6 +295,7 @@ def create_or_restore_analysis_run(
                     manifest["schema_version"],
                     versions["behavioral"],
                     versions["comparison"],
+                    input_fingerprint,
                     now,
                     now,
                 ),
@@ -488,6 +499,9 @@ def _comparison_llm_payload(
             ]["profile"],
             "revealed_profile": comparison_input["revealed_profile"]["profile"],
         },
+        "financial_context": comparison_input["stated_preference"][
+            "financial_context"
+        ],
         "confidence_anchor": comparison_input["cross_context_calibration"][
             "behavioral_confidence_base"
         ],
@@ -511,39 +525,48 @@ USER_FACING_INTERNAL_PATTERNS = (
         re.IGNORECASE,
     ),
 )
-DIRECT_ADVICE_PATTERNS = (
-    re.compile(r"(?:매수|매도|투자).*(?:추천(?:합니다|해요)|권(?:합니다|해요)|하세요)"),
-    re.compile(r"비중을\s*(?:늘리세요|줄이세요|조정하세요)"),
+DIRECT_INVESTMENT_ADVICE_PATTERNS = (
+    re.compile(r"(?:매수|매도)(?:를)?\s*(?:추천|권|해요|하세요)"),
+    re.compile(r"(?:사세요|파세요)"),
+    re.compile(
+        r"(?:종목|주식|ETF|가상자산|암호화폐|코인|펀드|채권|금융상품)"
+        r".{0,16}(?:추천(?:합니다|해요)|권(?:합니다|해요))"
+    ),
+    re.compile(r"투자(?:를)?\s*(?:추천(?:합니다|해요)|권(?:합니다|해요)|하세요|해요)"),
+    re.compile(
+        r"(?:위험자산|주식|투자자산).{0,20}비중.{0,20}"
+        r"(?:늘리|줄이|조정)(?:세요|해요)"
+    ),
+    re.compile(r"(?:대출|레버리지).{0,20}(?:투자|활용).{0,12}(?:추천|권|하세요|해요)"),
+    re.compile(r"(?:수익|수익률).{0,16}(?:보장|확정|확실)"),
+    re.compile(
+        r"\d+(?:\.\d+)?%\s*(?:로|까지|이하|이상)?.{0,20}"
+        r"(?:줄이|늘리|조정|유지)(?:세요|해요)"
+    ),
 )
 USER_FACING_SIMULATION_PATTERNS = (
     re.compile(r"(?:실제|실전)\s*(?:투자|거래)"),
 )
-VERIFIABLE_ACTION_PATTERNS = {
-    "increase": re.compile(
-        r"(?:(?:비중|노출).{0,12}(?:높이|늘리|확대|증가)|"
-        r"(?:높이|늘리|확대|증가).{0,12}(?:비중|노출))"
-    ),
-    "decrease": re.compile(
-        r"(?:(?:비중|노출).{0,12}(?:낮추|줄이|축소|감소)|"
-        r"(?:낮추|줄이|축소|감소).{0,12}(?:비중|노출))"
-    ),
-    "hold": re.compile(r"유지"),
-    "reentry": re.compile(r"재진입|다시\s*(?:늘리|높이|확대)"),
-    "recovery": re.compile(r"회복"),
-}
 
 
 def _validate_user_facing_analysis(
-    value: Mapping[str, Any], verified_observations: list[str]
+    value: Mapping[str, Any], _verified_observations: list[str]
 ) -> None:
     text_fields = (
         "stated_preference_summary",
         "revealed_preference_summary",
         "stated_revealed_gap",
         "final_analysis",
+        "personalized_guidance",
     )
     texts = [str(value[field]) for field in text_fields]
-    texts.extend(str(item) for item in value["key_behavioral_evidence"])
+    evidence = [str(item) for item in value["key_behavioral_evidence"]]
+    if not evidence or any(item not in _verified_observations for item in evidence):
+        raise AnalysisPipelineError(
+            "invalid_response",
+            "Kimi-K3 key behavioral evidence must match the verified enum",
+        )
+    texts.extend(evidence)
     if sum(text.count("사용자님") for text in texts) > 1:
         raise AnalysisPipelineError(
             "invalid_response",
@@ -556,14 +579,15 @@ def _validate_user_facing_analysis(
             "invalid_response",
             "Kimi-K3 user-facing wording was too strong for the confidence level",
         )
-    verified_text = " ".join(verified_observations)
     for text in texts:
         if any(pattern.search(text) for pattern in USER_FACING_INTERNAL_PATTERNS):
             raise AnalysisPipelineError(
                 "invalid_response",
                 "Kimi-K3 user-facing output exposed internal analysis metadata",
             )
-        if any(pattern.search(text) for pattern in DIRECT_ADVICE_PATTERNS):
+        if any(
+            pattern.search(text) for pattern in DIRECT_INVESTMENT_ADVICE_PATTERNS
+        ):
             raise AnalysisPipelineError(
                 "invalid_response",
                 "Kimi-K3 user-facing output contained direct investment advice",
@@ -573,19 +597,15 @@ def _validate_user_facing_analysis(
                 "invalid_response",
                 "Kimi-K3 user-facing output described simulated choices as real trading",
             )
-        if re.search(r"[가-힣]", text) is None or re.search(
-            r"요[.!?]?\s*$", text
-        ) is None:
+        if re.search(r"[가-힣]", text) is None:
             raise AnalysisPipelineError(
                 "invalid_response",
-                "Kimi-K3 user-facing prose must use natural Korean 해요체",
+                "Kimi-K3 user-facing prose must contain Korean text",
             )
-        for concept, pattern in VERIFIABLE_ACTION_PATTERNS.items():
-            if pattern.search(text) and not pattern.search(verified_text):
-                raise AnalysisPipelineError(
-                    "invalid_response",
-                    f"Kimi-K3 invented an unverified behavioral action: {concept}",
-                )
+        if re.search(r"니다[.!?]?\s*$", text):
+            LOGGER.warning(
+                "Non-haeyoche user-facing text generated; accepted as a style-only deviation"
+            )
 
 
 def _call_structured(
@@ -895,7 +915,29 @@ def execute_analysis_run(
                 "Information responsiveness describes only reaction magnitude and "
                 "must never be interpreted as aggressive or conservative direction. "
                 "Cross-market conflict controls confidence only. Never recommend a "
-                "product, allocation, purchase, sale, or investment strategy. Return "
+                "product, allocation, purchase, sale, or investment strategy. For "
+                "personalized_guidance, qualitatively combine the supplied monthly "
+                "income range, current investment-asset ratio, and fixed revealed "
+                "profile instead of listing them separately. Follow this reasoning "
+                "order: assess current risk exposure from the asset ratio; compare it "
+                "with the revealed profile; explain alignment or mismatch; then give "
+                "a general review direction for any future allocation change. An "
+                "aggressive profile with low current exposure is not, by itself, "
+                "excessive current risk. A conservative profile with high current "
+                "exposure may warrant a cautious mismatch explanation. Write 2 to 4 "
+                "natural sentences covering current state, profile relationship, and "
+                "review direction. Do not jump directly to generic emergency-fund or "
+                "liquidity advice before explaining that relationship. Do not invent "
+                "formulas, suitability scores, "
+                "unknown expenses, debt, emergency savings, dependents, cash holdings, "
+                "or precise target allocation percentages. Monthly income alone does "
+                "not establish total financial capacity. If financial context and "
+                "behavior differ, explain what should be reviewed without changing "
+                "investor_type. You may suggest reviewing liquidity, emergency funds, "
+                "and risk tolerance in general terms after the relationship-based "
+                "assessment. Never recommend specific stocks, "
+                "ETFs, cryptoassets, products, leverage, borrowing, or imply guaranteed "
+                "returns. Return "
                 "only schema-valid JSON."
             ),
             payload=call2_payload,

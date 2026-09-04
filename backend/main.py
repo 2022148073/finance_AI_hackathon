@@ -49,6 +49,7 @@ from schemas import (
     EntryRiskShareSubmission,
     Episode5PostSubmission,
     Episode5PreSubmission,
+    RestartAssessmentRequest,
     StartSessionRequest,
     SurveySubmission,
 )
@@ -832,6 +833,94 @@ def create_app(
     @application.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @application.post(
+        "/api/assessment-attempts", status_code=status.HTTP_201_CREATED
+    )
+    def create_assessment_attempt(
+        payload: RestartAssessmentRequest,
+        request: Request,
+    ) -> dict[str, object]:
+        """Create an append-only measurement attempt after a completed analysis."""
+        database = Path(request.app.state.database_path)
+        with closing(connect(database)) as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                completed = connection.execute(
+                    "SELECT 1 FROM llm_analysis_runs "
+                    "WHERE user_id = ? AND status = 'completed' LIMIT 1",
+                    (payload.previous_assessment_id,),
+                ).fetchone()
+                if completed is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="완료된 분석 이후에만 새 측정을 시작할 수 있습니다.",
+                    )
+
+                previous = connection.execute(
+                    "SELECT participant_id,attempt_number FROM assessment_attempts "
+                    "WHERE assessment_id = ?",
+                    (payload.previous_assessment_id,),
+                ).fetchone()
+                if previous is None:
+                    connection.execute(
+                        "INSERT INTO assessment_attempts "
+                        "(assessment_id,participant_id,attempt_number,"
+                        "previous_assessment_id,created_at) VALUES (?,?,1,NULL,?)",
+                        (
+                            payload.previous_assessment_id,
+                            payload.participant_id,
+                            _utc_now(),
+                        ),
+                    )
+                elif previous["participant_id"] != payload.participant_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="이전 측정과 참가자 식별자가 일치하지 않습니다.",
+                    )
+
+                existing = connection.execute(
+                    "SELECT assessment_id,attempt_number FROM assessment_attempts "
+                    "WHERE participant_id = ? AND previous_assessment_id = ?",
+                    (payload.participant_id, payload.previous_assessment_id),
+                ).fetchone()
+                if existing is not None:
+                    connection.commit()
+                    return {
+                        "assessment_id": str(existing["assessment_id"]),
+                        "attempt_number": int(existing["attempt_number"]),
+                        "created": False,
+                    }
+
+                attempt_number = int(
+                    connection.execute(
+                        "SELECT COALESCE(MAX(attempt_number),0) + 1 "
+                        "FROM assessment_attempts WHERE participant_id = ?",
+                        (payload.participant_id,),
+                    ).fetchone()[0]
+                )
+                assessment_id = f"web_{uuid.uuid4().hex}"
+                connection.execute(
+                    "INSERT INTO assessment_attempts "
+                    "(assessment_id,participant_id,attempt_number,"
+                    "previous_assessment_id,created_at) VALUES (?,?,?,?,?)",
+                    (
+                        assessment_id,
+                        payload.participant_id,
+                        attempt_number,
+                        payload.previous_assessment_id,
+                        _utc_now(),
+                    ),
+                )
+                connection.commit()
+                return {
+                    "assessment_id": assessment_id,
+                    "attempt_number": attempt_number,
+                    "created": True,
+                }
+            except HTTPException:
+                connection.rollback()
+                raise
 
     @application.post("/api/analysis/runs", status_code=status.HTTP_202_ACCEPTED)
     def start_analysis_run(
