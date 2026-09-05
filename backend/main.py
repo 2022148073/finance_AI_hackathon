@@ -82,7 +82,12 @@ from survey import (
 
 BACKEND_DIR = Path(__file__).resolve().parent
 load_dotenv(BACKEND_DIR / ".env", override=False)
-DEFAULT_DATABASE_PATH = BACKEND_DIR / "data" / "experiment.db"
+DEFAULT_DATABASE_PATH = Path(
+    os.getenv(
+        "DATABASE_PATH",
+        str(BACKEND_DIR / "data" / "experiment.db"),
+    )
+)
 DEFAULT_SCENARIO_DIR = BACKEND_DIR / "scenarios"
 DEFAULT_STIMULUS_DIR = DEFAULT_SCENARIO_DIR / "episode5" / "stimuli"
 ScenarioPicker = Callable[[list[str]], str]
