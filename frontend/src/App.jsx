@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import AccessGate from "./AccessGate.jsx";
 import Survey from "./Survey.jsx";
 
-const API_BASE = window.__API_BASE_URL__ ?? "http://127.0.0.1:8000";
+const API_BASE =
+  window.__API_BASE_URL__ ??
+  (["localhost", "127.0.0.1"].includes(window.location.hostname)
+    ? "http://127.0.0.1:8000"
+    : "");
 const USER_ID_KEY = "experiment_user_id";
 const PARTICIPANT_ID_KEY = "experiment_participant_id";
 const ANALYSIS_POLL_INTERVAL_MS = 1500;
