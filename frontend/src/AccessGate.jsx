@@ -43,10 +43,10 @@ export default function AccessGate({ apiBase, initialError = "", onGranted }) {
           <h1>FlowBit</h1>
         </div>
         <p className="access-gate-description">
-          대회 심사용 데모 서비스입니다.
+          개인의 행동을 바탕으로 투자 성향을 분석해드려요.
           <br />
           <span className="access-instruction-line">
-            안내받은 접근 코드를 입력해 주세요.
+            전달받은 코드를 입력해주세요.
           </span>
         </p>
         <form onSubmit={submit}>

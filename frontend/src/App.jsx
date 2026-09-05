@@ -241,11 +241,7 @@ function AnalysisResult({ run, onRetry, onRestart, restarting, restartError }) {
           </button>
         ) : (
           <div className="restart-confirmation" role="alertdialog" aria-live="polite">
-            <h2>새로운 측정을 시작할까요?</h2>
-            <p>
-              기존 설문, 행동 기록과 분석 결과는 삭제되지 않아요. 새로운 응답은
-              별도의 측정 회차와 분석 결과로 저장돼요.
-            </p>
+            <h2>투자 성향을 다시 조사할까요?</h2>
             {restartError && <p className="inline-error">{restartError}</p>}
             <div className="restart-actions">
               <button
@@ -262,7 +258,7 @@ function AnalysisResult({ run, onRetry, onRestart, restarting, restartError }) {
                 disabled={restarting}
                 onClick={onRestart}
               >
-                {restarting ? "새 측정을 준비하고 있어요…" : "확인하고 다시 시작"}
+                {restarting ? "새 측정을 준비하고 있어요…" : "확인하고 다시 시작하기"}
               </button>
             </div>
           </div>
@@ -653,6 +649,9 @@ export default function App() {
           <div>
             <span className="asset-label">{session.asset}</span>
             <span className="normalized-label">Normalized · Day 1 = 100</span>
+            {session.episode === "E5" && (
+              <span className="fictional-company-label">Nova 사</span>
+            )}
           </div>
           <div className="current-price">
             <strong>{latestPoint?.normalized_price.toFixed(2)}</strong>

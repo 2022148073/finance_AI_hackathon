@@ -205,6 +205,13 @@ h2 {
   margin-top: 24px;
 }
 
+.survey-actions .secondary-button,
+.survey-actions .submit-button {
+  box-sizing: border-box;
+  min-height: 62px;
+  margin-top: 0;
+}
+
 .survey-next {
   margin-top: 0;
 }
@@ -319,6 +326,13 @@ h2 {
 .normalized-label {
   color: #81909c;
   font-size: 12px;
+}
+
+.fictional-company-label {
+  display: block;
+  color: #0b72d9;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .current-price {
@@ -710,6 +724,18 @@ h2 {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 20px;
+}
+
+.restart-actions .secondary-button {
+  flex: 0 0 112px;
+  min-width: 112px;
+  white-space: nowrap;
+}
+
+.restart-actions .submit-button {
+  flex: 1 1 auto;
+  width: auto;
+  margin-top: 0;
 }
 
 .gap-list {
