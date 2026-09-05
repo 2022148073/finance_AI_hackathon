@@ -1,14 +1,13 @@
-"""Two-call NVIDIA Kimi-K3 analysis pipeline with private audit persistence.
+"""Two-call NVIDIA hosted LLM analysis pipeline with private audit persistence.
 
 The feature manifest and ``build_llm_input.py`` are the only sources of truth
 for feature selection, quantitative anchors, bounded LLM adjustments, and the
 deterministic revealed profile.
 
-NVIDIA references (checked 2026-09-01):
-- https://build.nvidia.com/moonshotai/kimi-k3
-- https://docs.api.nvidia.com/nim/re/reference/moonshotai-kimi-k3
-- https://docs.api.nvidia.com/nim/reference/moonshotai-kimi-k3-statuspolling
-- https://docs.nvidia.com/nim/large-language-models/1.14.0/structured-generation.html
+NVIDIA references (checked 2026-09-06):
+- https://build.nvidia.com/openai/gpt-oss-20b?nim=hosted
+- https://build.nvidia.com/openai/gpt-oss-20b/modelcard
+- https://docs.nvidia.com/nim/large-language-models/1.15.0/structured-generation.html
 """
 
 from __future__ import annotations
@@ -45,14 +44,43 @@ LOGGER = logging.getLogger(__name__)
 load_dotenv(BACKEND_DIR / ".env", override=False)
 
 DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-DEFAULT_KIMI_MODEL = "moonshotai/kimi-k3"
-DEFAULT_KIMI_REASONING_EFFORT = "low"
-DEFAULT_KIMI_TEMPERATURE = 1.0
-DEFAULT_KIMI_MAX_TOKENS = 16384
-DEFAULT_KIMI_TIMEOUT_SECONDS = 600.0
-DEFAULT_KIMI_STATUS_POLL_INTERVAL_SECONDS = 2.0
-DEFAULT_KIMI_ANALYSIS_REVISION = "v1"
-KIMI_REASONING_EFFORTS = {"low", "high", "max"}
+DEFAULT_NVIDIA_LLM_MODEL = "openai/gpt-oss-20b"
+DEFAULT_NVIDIA_LLM_REASONING_EFFORT = "low"
+DEFAULT_NVIDIA_LLM_TEMPERATURE = 0.2
+DEFAULT_NVIDIA_LLM_MAX_TOKENS = 4096
+DEFAULT_NVIDIA_LLM_TIMEOUT_SECONDS = 180.0
+DEFAULT_NVIDIA_LLM_STATUS_POLL_INTERVAL_SECONDS = 2.0
+DEFAULT_NVIDIA_LLM_ANALYSIS_REVISION = "gpt_oss_20b_v1"
+NVIDIA_LLM_REASONING_EFFORTS = {"low", "medium", "high"}
+NVIDIA_LLM_MAX_TOKENS_LIMIT = 4096
+LEGACY_KIMI_ENV_VARS = (
+    "KIMI_MODEL",
+    "KIMI_REASONING_EFFORT",
+    "KIMI_ANALYSIS_REVISION",
+    "KIMI_TEMPERATURE",
+    "KIMI_MAX_TOKENS",
+    "KIMI_TIMEOUT_SECONDS",
+    "KIMI_STATUS_POLL_INTERVAL_SECONDS",
+)
+
+CALL2_SYSTEM_PROMPT = (
+    "Generate a final Korean interpretation from only the supplied fixed results, "
+    "financial context, confidence anchor, and verified behavioral observations. "
+    "Treat the stated/revealed profile labels and verified observations as immutable "
+    "facts; investor_type must remain the fixed Python revealed profile, and "
+    "key_behavioral_evidence must contain only supplied verified observations. "
+    "Follow the payload rules, which are the detailed policy source of truth, and "
+    "required_output_format exactly. Never invent behavior or unknown financial "
+    "circumstances. Information responsiveness describes reaction magnitude, not "
+    "risk direction. Matching stated and revealed labels alone does not establish "
+    "behavioral consistency; cross-context consistency informs confidence only. "
+    "For personalized_guidance, interpret current investment-asset exposure first, "
+    "then its relationship to the fixed revealed profile, then alignment or mismatch, "
+    "and finally general matters to review before a future change. Do not describe "
+    "the simulation as actual trading, and never recommend instruments, products, "
+    "purchases, sales, or precise allocations. Return only JSON matching the supplied "
+    "schema."
+)
 PUBLIC_STATUS_MESSAGES = {
     "queued": "분석을 준비하고 있습니다.",
     "processing": "응답을 분석하고 있습니다.",
@@ -82,7 +110,7 @@ class AnalysisPipelineError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class KimiSettings:
+class NvidiaLlmSettings:
     api_key: str
     base_url: str
     model: str
@@ -98,24 +126,31 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _runtime_settings() -> KimiSettings:
+def _runtime_settings() -> NvidiaLlmSettings:
     api_key = os.getenv("NVIDIA_API_KEY", "").strip()
     base_url = os.getenv("NVIDIA_BASE_URL", DEFAULT_NVIDIA_BASE_URL).strip()
-    model = os.getenv("KIMI_MODEL", DEFAULT_KIMI_MODEL).strip()
+    model = os.getenv("NVIDIA_LLM_MODEL", DEFAULT_NVIDIA_LLM_MODEL).strip()
     reasoning_effort = os.getenv(
-        "KIMI_REASONING_EFFORT", DEFAULT_KIMI_REASONING_EFFORT
+        "NVIDIA_LLM_REASONING_EFFORT", DEFAULT_NVIDIA_LLM_REASONING_EFFORT
     ).strip().lower()
     analysis_revision = os.getenv(
-        "KIMI_ANALYSIS_REVISION", DEFAULT_KIMI_ANALYSIS_REVISION
+        "NVIDIA_LLM_ANALYSIS_REVISION", DEFAULT_NVIDIA_LLM_ANALYSIS_REVISION
     ).strip().lower()
+    legacy_settings = [name for name in LEGACY_KIMI_ENV_VARS if os.getenv(name)]
+    if legacy_settings:
+        LOGGER.warning(
+            "Ignoring legacy KIMI_* settings; migrate to NVIDIA_LLM_* variables: %s",
+            ", ".join(legacy_settings),
+        )
     if not base_url or not model:
         raise AnalysisPipelineError(
-            "configuration_error", "NVIDIA_BASE_URL and KIMI_MODEL are required"
+            "configuration_error",
+            "NVIDIA_BASE_URL and NVIDIA_LLM_MODEL are required",
         )
-    if reasoning_effort not in KIMI_REASONING_EFFORTS:
+    if reasoning_effort not in NVIDIA_LLM_REASONING_EFFORTS:
         raise AnalysisPipelineError(
             "configuration_error",
-            "KIMI_REASONING_EFFORT must be low, high, or max",
+            "NVIDIA_LLM_REASONING_EFFORT must be low, medium, or high",
         )
     if not analysis_revision or not all(
         character.isalnum() or character in {"-", "_"}
@@ -123,44 +158,50 @@ def _runtime_settings() -> KimiSettings:
     ):
         raise AnalysisPipelineError(
             "configuration_error",
-            "KIMI_ANALYSIS_REVISION must contain only letters, numbers, - or _",
+            "NVIDIA_LLM_ANALYSIS_REVISION must contain only letters, numbers, - or _",
         )
     try:
         temperature = float(
-            os.getenv("KIMI_TEMPERATURE", str(DEFAULT_KIMI_TEMPERATURE))
+            os.getenv(
+                "NVIDIA_LLM_TEMPERATURE", str(DEFAULT_NVIDIA_LLM_TEMPERATURE)
+            )
         )
         max_tokens = int(
-            os.getenv("KIMI_MAX_TOKENS", str(DEFAULT_KIMI_MAX_TOKENS))
+            os.getenv(
+                "NVIDIA_LLM_MAX_TOKENS", str(DEFAULT_NVIDIA_LLM_MAX_TOKENS)
+            )
         )
         timeout = float(
             os.getenv(
-                "KIMI_TIMEOUT_SECONDS", str(DEFAULT_KIMI_TIMEOUT_SECONDS)
+                "NVIDIA_LLM_TIMEOUT_SECONDS",
+                str(DEFAULT_NVIDIA_LLM_TIMEOUT_SECONDS),
             )
         )
         poll_interval = float(
             os.getenv(
-                "KIMI_STATUS_POLL_INTERVAL_SECONDS",
-                str(DEFAULT_KIMI_STATUS_POLL_INTERVAL_SECONDS),
+                "NVIDIA_LLM_STATUS_POLL_INTERVAL_SECONDS",
+                str(DEFAULT_NVIDIA_LLM_STATUS_POLL_INTERVAL_SECONDS),
             )
         )
     except ValueError as exc:
         raise AnalysisPipelineError(
-            "configuration_error", "Kimi-K3 runtime setting is invalid"
+            "configuration_error", "NVIDIA hosted LLM runtime setting is invalid"
         ) from exc
     if (
         not 0 <= temperature <= 1
-        or not 1 <= max_tokens <= 65536
+        or not 1 <= max_tokens <= NVIDIA_LLM_MAX_TOKENS_LIMIT
         or timeout <= 0
         or not 0.1 <= poll_interval <= 30
     ):
         raise AnalysisPipelineError(
-            "configuration_error", "Kimi-K3 runtime setting is out of range"
+            "configuration_error",
+            "NVIDIA hosted LLM runtime setting is out of range",
         )
     model_token = model.rsplit("/", 1)[-1].replace("-", "_")
     analysis_config_version = (
         f"{model_token}_{reasoning_effort}_{analysis_revision}"
     )
-    return KimiSettings(
+    return NvidiaLlmSettings(
         api_key=api_key,
         base_url=base_url.rstrip("/"),
         model=model,
@@ -487,6 +528,16 @@ def _behavioral_feature_guide(manifest: Mapping[str, Any]) -> dict[str, Any]:
     return guide
 
 
+def _behavioral_llm_payload(
+    behavioral_input: Mapping[str, Any], manifest: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Keep stated-preference information outside the Call 1 context."""
+    return {
+        "feature_guide": _behavioral_feature_guide(manifest),
+        "user_behavioral_input": behavioral_input,
+    }
+
+
 def _comparison_llm_payload(
     comparison_input: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -564,43 +615,43 @@ def _validate_user_facing_analysis(
     if not evidence or any(item not in _verified_observations for item in evidence):
         raise AnalysisPipelineError(
             "invalid_response",
-            "Kimi-K3 key behavioral evidence must match the verified enum",
+            "NVIDIA LLM key behavioral evidence must match the verified enum",
         )
     texts.extend(evidence)
     if sum(text.count("사용자님") for text in texts) > 1:
         raise AnalysisPipelineError(
             "invalid_response",
-            "Kimi-K3 user-facing output repeated 사용자님 unnecessarily",
+            "NVIDIA LLM user-facing output repeated 사용자님 unnecessarily",
         )
     if value.get("confidence_level") in {"low", "medium"} and any(
         re.search(r"(?:일관된|명확한|확실한)", text) for text in texts
     ):
         raise AnalysisPipelineError(
             "invalid_response",
-            "Kimi-K3 user-facing wording was too strong for the confidence level",
+            "NVIDIA LLM user-facing wording was too strong for the confidence level",
         )
     for text in texts:
         if any(pattern.search(text) for pattern in USER_FACING_INTERNAL_PATTERNS):
             raise AnalysisPipelineError(
                 "invalid_response",
-                "Kimi-K3 user-facing output exposed internal analysis metadata",
+                "NVIDIA LLM user-facing output exposed internal analysis metadata",
             )
         if any(
             pattern.search(text) for pattern in DIRECT_INVESTMENT_ADVICE_PATTERNS
         ):
             raise AnalysisPipelineError(
                 "invalid_response",
-                "Kimi-K3 user-facing output contained direct investment advice",
+                "NVIDIA LLM user-facing output contained direct investment advice",
             )
         if any(pattern.search(text) for pattern in USER_FACING_SIMULATION_PATTERNS):
             raise AnalysisPipelineError(
                 "invalid_response",
-                "Kimi-K3 user-facing output described simulated choices as real trading",
+                "NVIDIA LLM user-facing output described simulated choices as real trading",
             )
         if re.search(r"[가-힣]", text) is None:
             raise AnalysisPipelineError(
                 "invalid_response",
-                "Kimi-K3 user-facing prose must contain Korean text",
+                "NVIDIA LLM user-facing prose must contain Korean text",
             )
         if re.search(r"니다[.!?]?\s*$", text):
             LOGGER.warning(
@@ -610,7 +661,7 @@ def _validate_user_facing_analysis(
 
 def _call_structured(
     *,
-    settings: KimiSettings,
+    settings: NvidiaLlmSettings,
     schema_name: str,
     schema: Mapping[str, Any],
     system_prompt: str,
@@ -653,7 +704,8 @@ def _call_structured(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise AnalysisPipelineError(
-                "timeout", "Kimi-K3 pending result exceeded the polling deadline"
+                "timeout",
+                "NVIDIA hosted LLM pending result exceeded the polling deadline",
             )
         return remaining
 
@@ -737,24 +789,24 @@ def _call_structured(
     choices = response_payload.get("choices")
     if not isinstance(choices, list) or not choices:
         raise AnalysisPipelineError(
-            "invalid_response", "Kimi-K3 response did not contain a choice"
+            "invalid_response", "NVIDIA hosted LLM response did not contain a choice"
         )
     first_choice = choices[0]
     message = first_choice.get("message") if isinstance(first_choice, Mapping) else None
     content = message.get("content") if isinstance(message, Mapping) else None
     if not isinstance(content, str) or not content.strip():
         raise AnalysisPipelineError(
-            "invalid_response", "Kimi-K3 response content was empty"
+            "invalid_response", "NVIDIA hosted LLM response content was empty"
         )
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError as exc:
         raise AnalysisPipelineError(
-            "invalid_response", "Kimi-K3 response was not valid JSON"
+            "invalid_response", "NVIDIA hosted LLM response was not valid JSON"
         ) from exc
     if not isinstance(parsed, dict):
         raise AnalysisPipelineError(
-            "invalid_response", "Kimi-K3 response root must be an object"
+            "invalid_response", "NVIDIA hosted LLM response root must be an object"
         )
     return parsed
 
@@ -830,10 +882,7 @@ def execute_analysis_run(
         behavioral_input = build_behavioral_input(
             database_path, user_id, manifest
         )
-        call1_payload = {
-            "feature_guide": _behavioral_feature_guide(manifest),
-            "user_behavioral_input": behavioral_input,
-        }
+        call1_payload = _behavioral_llm_payload(behavioral_input, manifest)
         _update_artifact(
             database_path,
             analysis_id,
@@ -888,58 +937,7 @@ def execute_analysis_run(
             settings=settings,
             schema_name="stated_revealed_interpretation",
             schema=_comparison_response_schema(comparison_input, manifest),
-            system_prompt=(
-                "Write a respectful Korean user-facing interpretation using only the "
-                "verified Korean observations supplied in this request. Every prose "
-                "field and every evidence item must be a non-empty natural Korean "
-                "해요체 sentence ending in -요. Never use -습니다/-입니다 style or "
-                "plain -다/-한다 style. Avoid repeating 사용자님 and omit the subject "
-                "naturally whenever possible. This is a simulated market-choice "
-                "assessment, so never describe it as 실제 투자, 실제 거래, or 실전 투자. "
-                "investor_type is the only fixed output field and must exactly match "
-                "the Python result. Choose confidence_level only from the allowed "
-                "manifest enum and use confidence_anchor as the primary calibration "
-                "evidence. Matching stated and revealed profile labels never proves "
-                "behavioral consistency; infer consistency only from cross-context "
-                "calibration and verified observations. For high confidence, wording "
-                "may indicate a comparatively clear or similar tendency across "
-                "situations. For medium confidence, mention observed differences and "
-                "avoid strong claims such as 일관된, 명확한, or 확실한. For low "
-                "confidence, state that the evidence is limited or varies by context "
-                "and requires cautious interpretation. Never expose English ordinal "
-                "levels, decimal "
-                "values, point scores, experiment or episode names, feature names, "
-                "JSON paths, rubrics, base levels, cutoffs, or adjustment mechanics. "
-                "Do not invent an allocation increase, decrease, hold, re-entry, or "
-                "recovery action that is absent from verified_behavioral_observations. "
-                "Information responsiveness describes only reaction magnitude and "
-                "must never be interpreted as aggressive or conservative direction. "
-                "Cross-market conflict controls confidence only. Never recommend a "
-                "product, allocation, purchase, sale, or investment strategy. For "
-                "personalized_guidance, qualitatively combine the supplied monthly "
-                "income range, current investment-asset ratio, and fixed revealed "
-                "profile instead of listing them separately. Follow this reasoning "
-                "order: assess current risk exposure from the asset ratio; compare it "
-                "with the revealed profile; explain alignment or mismatch; then give "
-                "a general review direction for any future allocation change. An "
-                "aggressive profile with low current exposure is not, by itself, "
-                "excessive current risk. A conservative profile with high current "
-                "exposure may warrant a cautious mismatch explanation. Write 2 to 4 "
-                "natural sentences covering current state, profile relationship, and "
-                "review direction. Do not jump directly to generic emergency-fund or "
-                "liquidity advice before explaining that relationship. Do not invent "
-                "formulas, suitability scores, "
-                "unknown expenses, debt, emergency savings, dependents, cash holdings, "
-                "or precise target allocation percentages. Monthly income alone does "
-                "not establish total financial capacity. If financial context and "
-                "behavior differ, explain what should be reviewed without changing "
-                "investor_type. You may suggest reviewing liquidity, emergency funds, "
-                "and risk tolerance in general terms after the relationship-based "
-                "assessment. Never recommend specific stocks, "
-                "ETFs, cryptoassets, products, leverage, borrowing, or imply guaranteed "
-                "returns. Return "
-                "only schema-valid JSON."
-            ),
+            system_prompt=CALL2_SYSTEM_PROMPT,
             payload=call2_payload,
         )
         _validate_response_shape(

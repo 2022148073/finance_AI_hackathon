@@ -32,7 +32,7 @@ npm run dev
 자동 이관하지 않습니다. DB 경로를 바꾸려면 `EXPERIMENT_DB_PATH` 환경변수를
 사용합니다.
 
-### Kimi-K3 분석 설정
+### NVIDIA GPT-OSS 20B 분석 설정
 
 `backend/.env.example`을 `backend/.env`로 복사한 뒤 NVIDIA API Catalog에서
 발급한 서버 전용 API key를 설정합니다.
@@ -40,13 +40,13 @@ npm run dev
 ```dotenv
 NVIDIA_API_KEY=your_nvidia_api_key_here
 NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
-KIMI_MODEL=moonshotai/kimi-k3
-KIMI_REASONING_EFFORT=low
-KIMI_ANALYSIS_REVISION=v1
-KIMI_TEMPERATURE=1.0
-KIMI_MAX_TOKENS=16384
-KIMI_TIMEOUT_SECONDS=600
-KIMI_STATUS_POLL_INTERVAL_SECONDS=2
+NVIDIA_LLM_MODEL=openai/gpt-oss-20b
+NVIDIA_LLM_REASONING_EFFORT=low
+NVIDIA_LLM_ANALYSIS_REVISION=gpt_oss_20b_v1
+NVIDIA_LLM_TEMPERATURE=0.2
+NVIDIA_LLM_MAX_TOKENS=4096
+NVIDIA_LLM_TIMEOUT_SECONDS=180
+NVIDIA_LLM_STATUS_POLL_INTERVAL_SECONDS=2
 ```
 
 `.env`는 Git에서 제외되며 프론트엔드 번들에 포함되지 않습니다. 환경변수를
@@ -55,15 +55,22 @@ KIMI_STATUS_POLL_INTERVAL_SECONDS=2
 `GET /api/analysis/runs/{analysis_id}`는 처리 상태와 사용자 공개용 결과만
 반환합니다.
 
-분석 캐시는 모델·reasoning effort·`KIMI_ANALYSIS_REVISION`을 조합한 설정
-버전별로 분리됩니다. 따라서 `low`에서 `max`로 변경하면 기존 `low` 결과를
+분석 캐시는 모델·reasoning effort·`NVIDIA_LLM_ANALYSIS_REVISION`을 조합한
+설정 버전별로 분리됩니다. reasoning effort 또는 모델을 바꾸면 이전 결과를
 재사용하지 않습니다. schema 변경 없이 프롬프트나 기타 실행 의미를 바꿀 때는
-`KIMI_ANALYSIS_REVISION`을 올립니다.
+`NVIDIA_LLM_ANALYSIS_REVISION`을 올립니다. GPT-OSS 20B의 reasoning effort는
+`low`, `medium`, `high`만 허용하며 `NVIDIA_LLM_MAX_TOKENS`는 4096을 넘길 수
+없습니다.
+
+이전 배포의 `KIMI_*` 환경변수는 더 이상 runtime 설정으로 사용하지 않습니다.
+Railway와 로컬 `.env`에서 위의 `NVIDIA_LLM_*` 이름으로 옮긴 뒤 기존
+`KIMI_*` 항목을 제거합니다. 기존 항목이 남아 있으면 backend는 이를 무시하고
+migration 경고를 기록합니다.
 
 NVIDIA가 chat completion에 `202 Pending`과 `requestId`를 반환하면 backend가
-`/v1/status/{requestId}`를 `KIMI_STATUS_POLL_INTERVAL_SECONDS` 간격으로
-조회합니다. 최종 `200` 응답이 도착하거나 `KIMI_TIMEOUT_SECONDS`의 전체 호출
-기한이 끝날 때까지 같은 request를 복제하지 않고 기다립니다.
+`/v1/status/{requestId}`를 `NVIDIA_LLM_STATUS_POLL_INTERVAL_SECONDS` 간격으로
+조회합니다. 최종 `200` 응답이 도착하거나 `NVIDIA_LLM_TIMEOUT_SECONDS`의 전체
+호출 기한이 끝날 때까지 같은 request를 복제하지 않고 기다립니다.
 
 ## API 흐름
 

@@ -22,11 +22,14 @@ from build_llm_input import (  # noqa: E402
     _extract_dimension_result,
     _stated_preference,
     calculate_cross_context_calibration,
+    calculate_revealed_profile,
     load_feature_manifest,
 )
 from database import connect, initialize_database  # noqa: E402
 from llm_pipeline import (  # noqa: E402
+    CALL2_SYSTEM_PROMPT,
     AnalysisPipelineError,
+    _behavioral_llm_payload,
     _call_structured,
     _comparison_llm_payload,
     _comparison_response_schema,
@@ -87,11 +90,20 @@ class LlmPipelineTargetedTests(unittest.TestCase):
                 )
             connection.commit()
 
+    def test_default_production_settings_use_gpt_oss_20b(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            settings = _runtime_settings()
+        self.assertEqual(settings.model, "openai/gpt-oss-20b")
+        self.assertEqual(settings.reasoning_effort, "low")
+        self.assertEqual(settings.max_tokens, 4096)
+        self.assertEqual(settings.temperature, 0.2)
+        self.assertEqual(settings.timeout_seconds, 180.0)
+
     def test_reasoning_effort_creates_a_distinct_analysis_config(self) -> None:
         self._insert_eligible_user("cache-user")
         environment = {
-            "KIMI_MODEL": "moonshotai/kimi-k3",
-            "KIMI_ANALYSIS_REVISION": "v1",
+            "NVIDIA_LLM_MODEL": "openai/gpt-oss-20b",
+            "NVIDIA_LLM_ANALYSIS_REVISION": "v1",
         }
         with (
             patch(
@@ -99,7 +111,9 @@ class LlmPipelineTargetedTests(unittest.TestCase):
                 return_value="fingerprint-a",
             ),
             patch.dict(
-                os.environ, {**environment, "KIMI_REASONING_EFFORT": "low"}
+                os.environ,
+                {**environment, "NVIDIA_LLM_REASONING_EFFORT": "low"},
+                clear=True,
             ),
         ):
             low = create_or_restore_analysis_run(self.database_path, "cache-user")
@@ -117,14 +131,16 @@ class LlmPipelineTargetedTests(unittest.TestCase):
                 return_value="fingerprint-a",
             ),
             patch.dict(
-                os.environ, {**environment, "KIMI_REASONING_EFFORT": "max"}
+                os.environ,
+                {**environment, "NVIDIA_LLM_REASONING_EFFORT": "high"},
+                clear=True,
             ),
         ):
-            maximum = create_or_restore_analysis_run(
+            high = create_or_restore_analysis_run(
                 self.database_path, "cache-user"
             )
 
-        self.assertNotEqual(low["analysis_id"], maximum["analysis_id"])
+        self.assertNotEqual(low["analysis_id"], high["analysis_id"])
         with closing(connect(self.database_path)) as connection:
             rows = connection.execute(
                 "SELECT analysis_config_version FROM llm_analysis_runs "
@@ -132,8 +148,33 @@ class LlmPipelineTargetedTests(unittest.TestCase):
             ).fetchall()
         self.assertEqual(
             [row["analysis_config_version"] for row in rows],
-            ["kimi_k3_low_v1", "kimi_k3_max_v1"],
+            ["gpt_oss_20b_low_v1", "gpt_oss_20b_high_v1"],
         )
+
+    def test_gpt_oss_accepts_low_but_rejects_max_reasoning_effort(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"NVIDIA_LLM_REASONING_EFFORT": "low"},
+            clear=True,
+        ):
+            self.assertEqual(_runtime_settings().reasoning_effort, "low")
+
+        with patch.dict(
+            os.environ,
+            {"NVIDIA_LLM_REASONING_EFFORT": "max"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(AnalysisPipelineError, "low, medium, or high"):
+                _runtime_settings()
+
+    def test_gpt_oss_rejects_max_tokens_above_hosted_limit(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"NVIDIA_LLM_MAX_TOKENS": "4097"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(AnalysisPipelineError, "out of range"):
+                _runtime_settings()
 
     def test_stated_preference_exports_configured_financial_context_labels(self) -> None:
         now = "2026-09-04T00:00:00+00:00"
@@ -196,16 +237,17 @@ class LlmPipelineTargetedTests(unittest.TestCase):
             },
         )
 
-    def test_kimi_timeout_and_pending_poll_interval_are_configured(self) -> None:
+    def test_nvidia_timeout_and_pending_poll_interval_are_configured(self) -> None:
         with patch.dict(
             os.environ,
             {
-                "KIMI_TIMEOUT_SECONDS": "600",
-                "KIMI_STATUS_POLL_INTERVAL_SECONDS": "2",
+                "NVIDIA_LLM_TIMEOUT_SECONDS": "150",
+                "NVIDIA_LLM_STATUS_POLL_INTERVAL_SECONDS": "2",
             },
+            clear=True,
         ):
             settings = _runtime_settings()
-        self.assertEqual(settings.timeout_seconds, 600.0)
+        self.assertEqual(settings.timeout_seconds, 150.0)
         self.assertEqual(settings.status_poll_interval_seconds, 2.0)
 
     def test_completed_analysis_cache_requires_matching_input_fingerprint(self) -> None:
@@ -261,7 +303,7 @@ class LlmPipelineTargetedTests(unittest.TestCase):
         response.text = str(payload)
         return response
 
-    def test_kimi_202_is_polled_until_final_200(self) -> None:
+    def test_nvidia_202_is_polled_until_final_200(self) -> None:
         request_id = str(uuid.uuid4())
         pending = self._http_response(202, {"requestId": request_id})
         pending_again = self._http_response(202, {"requestId": request_id})
@@ -283,8 +325,9 @@ class LlmPipelineTargetedTests(unittest.TestCase):
             os.environ,
             {
                 "NVIDIA_API_KEY": "test-key",
-                "KIMI_STATUS_POLL_INTERVAL_SECONDS": "0.1",
+                "NVIDIA_LLM_STATUS_POLL_INTERVAL_SECONDS": "0.1",
             },
+            clear=True,
         ):
             settings = _runtime_settings()
         with (
@@ -308,17 +351,23 @@ class LlmPipelineTargetedTests(unittest.TestCase):
             f"https://integrate.api.nvidia.com/v1/status/{request_id}",
         )
         posted_json = client.post.call_args.kwargs["json"]
+        self.assertEqual(posted_json["model"], "openai/gpt-oss-20b")
         self.assertEqual(posted_json["reasoning_effort"], "low")
+        self.assertEqual(posted_json["temperature"], 0.2)
+        self.assertEqual(posted_json["max_tokens"], 4096)
+        self.assertFalse(posted_json["stream"])
         self.assertEqual(posted_json["response_format"]["type"], "json_schema")
 
-    def test_kimi_202_without_uuid_request_id_is_rejected(self) -> None:
+    def test_nvidia_202_without_uuid_request_id_is_rejected(self) -> None:
         client = MagicMock()
         client.post.return_value = self._http_response(
             202, {"requestId": "not-a-uuid"}
         )
         client_context = MagicMock()
         client_context.__enter__.return_value = client
-        with patch.dict(os.environ, {"NVIDIA_API_KEY": "test-key"}):
+        with patch.dict(
+            os.environ, {"NVIDIA_API_KEY": "test-key"}, clear=True
+        ):
             settings = _runtime_settings()
         with patch("llm_pipeline.httpx.Client", return_value=client_context):
             with self.assertRaisesRegex(AnalysisPipelineError, "UUID"):
@@ -397,6 +446,17 @@ class LlmPipelineTargetedTests(unittest.TestCase):
         self.assertEqual(row["behavioral_input_json"], '{"stage": "call1"}')
         self.assertEqual(row["comparison_input_json"], '{"stage": "call2"}')
 
+    def test_call1_payload_excludes_stated_preference(self) -> None:
+        behavioral_input = {
+            "behavioral_analysis": {"episode1": {"summary_features": {}}},
+            "analysis_request": {"task": "behavior only"},
+        }
+        payload = _behavioral_llm_payload(behavioral_input, self.manifest)
+        serialized = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn("stated_preference", serialized)
+        self.assertNotIn("survey_baseline", serialized)
+        self.assertEqual(payload["user_behavioral_input"], behavioral_input)
+
     def test_evidence_must_be_manifest_allowed_and_exist_in_actual_input(self) -> None:
         rubrics = self.manifest["behavioral_dimension_rubrics"]["dimensions"]
         baselines = {
@@ -426,6 +486,15 @@ class LlmPipelineTargetedTests(unittest.TestCase):
             result, self.manifest, baselines, behavioral
         )
         self.assertEqual(cleaned["risk_engagement"]["final_level"], "medium")
+        profile, finalized_dimensions = calculate_revealed_profile(
+            result, self.manifest, baselines, behavioral
+        )
+        self.assertEqual(profile["risk_score"], 50.0)
+        self.assertEqual(profile["profile"], "위험중립형")
+        self.assertEqual(
+            finalized_dimensions["volatility_tolerance"]["final_level"],
+            "medium",
+        )
 
         dimensions["risk_engagement"]["evidence_fields"] = [
             "behavioral_analysis.episode3.fake_feature"
@@ -578,6 +647,37 @@ class LlmPipelineTargetedTests(unittest.TestCase):
         self.assertIn("current-state assessment", rules)
         self.assertIn("2~4개", request["required_output_format"]["personalized_guidance"])
 
+    def test_short_call2_prompt_delegates_detailed_policy_to_payload_rules(self) -> None:
+        self.assertLess(len(CALL2_SYSTEM_PROMPT), 2200)
+        for invariant in (
+            "immutable facts",
+            "key_behavioral_evidence",
+            "Information responsiveness",
+            "does not establish behavioral consistency",
+            "cross-context consistency informs confidence only",
+            "personalized_guidance",
+            "actual trading",
+            "Return only JSON",
+        ):
+            self.assertIn(invariant, CALL2_SYSTEM_PROMPT)
+
+        request = _comparison_request(
+            self.manifest,
+            {"profile": "위험중립형"},
+            "medium",
+        )
+        rules = " ".join(request["rules"])
+        for detailed_policy in (
+            "Do not recalculate, relabel, or override",
+            "Information sensitivity describes responsiveness",
+            "Cross-context consistency affects confidence",
+            "not real brokerage trading",
+            "Do not claim an increase, decrease, hold, re-entry",
+            "total assets, debt, fixed expenses, emergency savings",
+            "Do not recommend a specific stock, ETF, cryptoasset",
+        ):
+            self.assertIn(detailed_policy, rules)
+
     def test_user_facing_output_enforces_prose_and_guidance_policy(self) -> None:
         verified = ["위험자산 노출을 낮췄어요."]
         valid = {
@@ -689,6 +789,14 @@ class LlmPipelineTargetedTests(unittest.TestCase):
             "public_behavioral_observations": ["위험자산 노출을 유지했어요."],
         }
         schema = _comparison_response_schema(comparison_input, self.manifest)
+        self.assertEqual(
+            schema["properties"]["investor_type"]["enum"],
+            ["위험중립형"],
+        )
+        self.assertEqual(
+            schema["properties"]["key_behavioral_evidence"]["items"]["enum"],
+            ["위험자산 노출을 유지했어요."],
+        )
         self.assertEqual(
             schema["properties"]["confidence_level"]["enum"],
             self.manifest["revealed_profile_scoring"]["confidence_levels"],
